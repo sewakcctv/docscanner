@@ -30,384 +30,378 @@ function computeH(src: Point[], dst: Point[]): number[] {
   const A: number[][] = [], b: number[] = [];
   for (let i = 0; i < 4; i++) {
     const { x: xs, y: ys } = src[i], { x: xd, y: yd } = dst[i];
-    A.push([xs, ys, 1, 0, 0, 0, -xs * xd, -ys * xd]); b.push(xd);
-    A.push([0, 0, 0, xs, ys, 1, -xs * yd, -ys * yd]);  b.push(yd);
+    A.push([xs, ys, 1, 0, 0, 0, -xs*xd, -ys*xd]); b.push(xd);
+    A.push([0, 0, 0, xs, ys, 1, -xs*yd, -ys*yd]);  b.push(yd);
   }
   return solve8(A, b);
 }
 
 function applyH(h: number[], x: number, y: number): Point {
-  const d = h[6] * x + h[7] * y + 1;
-  return { x: (h[0] * x + h[1] * y + h[2]) / d, y: (h[3] * x + h[4] * y + h[5]) / d };
+  const d = h[6]*x + h[7]*y + 1;
+  return { x: (h[0]*x + h[1]*y + h[2]) / d, y: (h[3]*x + h[4]*y + h[5]) / d };
 }
 
-// ─── Edge-based document corner detection ────────────────────────────────────
+// ─── Hough-line document detection ───────────────────────────────────────────
 
-// Runs on a pre-downsampled canvas. Returns corners in that canvas's coords.
-function findCornersInCanvas(canvas: HTMLCanvasElement): [Point, Point, Point, Point] | null {
-  const { width: W, height: H } = canvas;
-  const { data } = canvas.getContext('2d')!.getImageData(0, 0, W, H);
+type HLine = { theta: number; r: number; votes: number };
 
-  const gray = new Float32Array(W * H);
-  for (let i = 0; i < W * H; i++)
-    gray[i] = data[i * 4] * 0.299 + data[i * 4 + 1] * 0.587 + data[i * 4 + 2] * 0.114;
-
-  // 3×3 Gaussian blur
-  const blur = new Float32Array(W * H);
-  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++)
-    blur[y * W + x] = (
-      gray[(y-1)*W+(x-1)] + 2*gray[(y-1)*W+x] + gray[(y-1)*W+(x+1)] +
-      2*gray[y*W+(x-1)]   + 4*gray[y*W+x]     + 2*gray[y*W+(x+1)] +
-      gray[(y+1)*W+(x-1)] + 2*gray[(y+1)*W+x] + gray[(y+1)*W+(x+1)]
+function gaussBlur3(g: Float32Array, W: number, H: number): Float32Array {
+  const o = new Float32Array(W * H);
+  for (let y = 1; y < H-1; y++) for (let x = 1; x < W-1; x++)
+    o[y*W+x] = (
+      g[(y-1)*W+(x-1)] + 2*g[(y-1)*W+x] + g[(y-1)*W+(x+1)] +
+      2*g[y*W+(x-1)]   + 4*g[y*W+x]     + 2*g[y*W+(x+1)] +
+      g[(y+1)*W+(x-1)] + 2*g[(y+1)*W+x] + g[(y+1)*W+(x+1)]
     ) / 16;
-
-  // Sobel edge magnitude
-  const mag = new Float32Array(W * H);
-  let maxMag = 0;
-  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
-    const gx =
-      -blur[(y-1)*W+(x-1)] - 2*blur[y*W+(x-1)] - blur[(y+1)*W+(x-1)] +
-       blur[(y-1)*W+(x+1)] + 2*blur[y*W+(x+1)] + blur[(y+1)*W+(x+1)];
-    const gy =
-      -blur[(y-1)*W+(x-1)] - 2*blur[(y-1)*W+x] - blur[(y-1)*W+(x+1)] +
-       blur[(y+1)*W+(x-1)] + 2*blur[(y+1)*W+x] + blur[(y+1)*W+(x+1)];
-    mag[y * W + x] = Math.sqrt(gx * gx + gy * gy);
-    if (mag[y * W + x] > maxMag) maxMag = mag[y * W + x];
-  }
-
-  if (maxMag < 8) return null;
-  const thr = maxMag * 0.22;
-
-  // Four diagonal-extreme edge points
-  // TL: min(x+y)  TR: max(x−y)  BR: max(x+y)  BL: min(x−y)
-  let tlS = Infinity, trS = -Infinity, brS = -Infinity, blS = Infinity;
-  let tl: Point | null = null, tr: Point | null = null;
-  let br: Point | null = null, bl: Point | null = null;
-
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    if (mag[y * W + x] < thr) continue;
-    if (x + y < tlS) { tlS = x + y; tl = { x, y }; }
-    if (x - y > trS) { trS = x - y; tr = { x, y }; }
-    if (x + y > brS) { brS = x + y; br = { x, y }; }
-    if (x - y < blS) { blS = x - y; bl = { x, y }; }
-  }
-
-  if (!tl || !tr || !br || !bl) return null;
-
-  const cx = (tl.x + tr.x + br.x + bl.x) / 4;
-  const cy = (tl.y + tr.y + br.y + bl.y) / 4;
-  const valid =
-    tl.x < cx && tl.y < cy && tr.x > cx && tr.y < cy &&
-    br.x > cx && br.y > cy && bl.x < cx && bl.y > cy &&
-    (tr.x - tl.x) / W > 0.18 && (bl.y - tl.y) / H > 0.18;
-
-  return valid ? [tl, tr, br, bl] : null;
+  return o;
 }
 
-function downsample(
-  src: HTMLCanvasElement | HTMLVideoElement,
-  srcW: number, srcH: number, maxDim: number
-): { canvas: HTMLCanvasElement; scale: number } {
-  const scale = Math.min(1, maxDim / Math.max(srcW, srcH));
-  const sw = Math.round(srcW * scale), sh = Math.round(srcH * scale);
+function sobelMag(b: Float32Array, W: number, H: number): { mag: Float32Array; peak: number } {
+  const mag = new Float32Array(W * H);
+  let peak = 0;
+  for (let y = 1; y < H-1; y++) for (let x = 1; x < W-1; x++) {
+    const gx = -b[(y-1)*W+(x-1)] - 2*b[y*W+(x-1)] - b[(y+1)*W+(x-1)]
+               +b[(y-1)*W+(x+1)] + 2*b[y*W+(x+1)] + b[(y+1)*W+(x+1)];
+    const gy = -b[(y-1)*W+(x-1)] - 2*b[(y-1)*W+x] - b[(y-1)*W+(x+1)]
+               +b[(y+1)*W+(x-1)] + 2*b[(y+1)*W+x] + b[(y+1)*W+(x+1)];
+    mag[y*W+x] = Math.sqrt(gx*gx + gy*gy);
+    if (mag[y*W+x] > peak) peak = mag[y*W+x];
+  }
+  return { mag, peak };
+}
+
+function houghLines(mag: Float32Array, peak: number, W: number, H: number): HLine[] {
+  const NT = 180;
+  const diag = Math.ceil(Math.hypot(W, H));
+  const RS = 2 * diag + 1;
+  const acc = new Int32Array(NT * RS);
+  const cos = new Float32Array(NT), sin = new Float32Array(NT);
+  for (let t = 0; t < NT; t++) {
+    cos[t] = Math.cos(t * Math.PI / NT);
+    sin[t] = Math.sin(t * Math.PI / NT);
+  }
+  const thr = peak * 0.14;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (mag[y*W+x] < thr) continue;
+    for (let t = 0; t < NT; t++) {
+      const r = Math.round(x * cos[t] + y * sin[t]) + diag;
+      if (r >= 0 && r < RS) acc[t * RS + r]++;
+    }
+  }
+  // Greedy peak extraction with NMS
+  const cells: {t: number; r: number; v: number}[] = [];
+  for (let t = 0; t < NT; t++) for (let r = 0; r < RS; r++) {
+    const v = acc[t*RS+r]; if (v >= 4) cells.push({t, r, v});
+  }
+  cells.sort((a, b) => b.v - a.v);
+  const used = new Uint8Array(NT * RS);
+  const out: HLine[] = [];
+  for (const {t, r, v} of cells) {
+    if (out.length >= 25) break;
+    if (used[t*RS+r]) continue;
+    out.push({ theta: t * Math.PI / NT, r: r - diag, votes: v });
+    for (let dt = -14; dt <= 14; dt++) for (let dr = -18; dr <= 18; dr++) {
+      const nt = ((t+dt)%NT+NT)%NT, nr = r+dr;
+      if (nr >= 0 && nr < RS) used[nt*RS+nr] = 1;
+    }
+  }
+  return out;
+}
+
+function linesIntersect(l1: HLine, l2: HLine): Point | null {
+  const c1 = Math.cos(l1.theta), s1 = Math.sin(l1.theta);
+  const c2 = Math.cos(l2.theta), s2 = Math.sin(l2.theta);
+  const det = c1*s2 - s1*c2;
+  if (Math.abs(det) < 1e-7) return null;
+  return { x: (l1.r*s2 - l2.r*s1)/det, y: (l2.r*c1 - l1.r*c2)/det };
+}
+
+function angDiff(a: number, b: number): number {
+  let d = Math.abs(a - b) % Math.PI;
+  return d > Math.PI/2 ? Math.PI - d : d;
+}
+
+function orderCorners(pts: Point[]): [Point, Point, Point, Point] {
+  const s = [...pts].sort((a, b) => (a.x+a.y) - (b.x+b.y));
+  const tl = s[0], br = s[3], rest = [s[1], s[2]];
+  const tr = rest[0].x > rest[1].x ? rest[0] : rest[1];
+  const bl = tr === rest[0] ? rest[1] : rest[0];
+  return [tl, tr, br, bl];
+}
+
+function bestQuad(lines: HLine[], W: number, H: number): [Point, Point, Point, Point] | null {
+  const n = Math.min(lines.length, 22);
+  if (n < 4) return null;
+  const PAR = 0.27, PERP_ERR = 0.38;
+  const MARGIN = Math.max(W, H) * 0.55;
+  const MIN_AREA = W * H * 0.035;
+
+  let bestScore = -1, best: [Point, Point, Point, Point] | null = null;
+  for (let i = 0; i < n-1; i++) {
+    for (let j = i+1; j < n; j++) {
+      if (angDiff(lines[i].theta, lines[j].theta) > PAR) continue;
+      for (let k = 0; k < n-1; k++) {
+        if (k===i||k===j) continue;
+        if (Math.abs(angDiff(lines[i].theta, lines[k].theta) - Math.PI/2) > PERP_ERR) continue;
+        for (let l = k+1; l < n; l++) {
+          if (l===i||l===j) continue;
+          if (angDiff(lines[k].theta, lines[l].theta) > PAR) continue;
+          const pts = [
+            linesIntersect(lines[i], lines[k]),
+            linesIntersect(lines[i], lines[l]),
+            linesIntersect(lines[j], lines[l]),
+            linesIntersect(lines[j], lines[k]),
+          ];
+          if (pts.some(p=>!p)) continue;
+          if (pts.some(p => p!.x < -MARGIN || p!.x > W+MARGIN || p!.y < -MARGIN || p!.y > H+MARGIN)) continue;
+          const [a,b,c,d] = pts as Point[];
+          const area = 0.5*Math.abs((a.x-c.x)*(b.y-d.y)-(b.x-d.x)*(a.y-c.y));
+          if (area < MIN_AREA) continue;
+          const score = lines[i].votes+lines[j].votes+lines[k].votes+lines[l].votes;
+          if (score > bestScore) { bestScore = score; best = orderCorners([a,b,c,d]); }
+        }
+      }
+    }
+  }
+  return best;
+}
+
+function detectInCanvas(small: HTMLCanvasElement): [Point, Point, Point, Point] | null {
+  const { width: W, height: H } = small;
+  const { data } = small.getContext('2d')!.getImageData(0, 0, W, H);
+  const gray = new Float32Array(W*H);
+  for (let i = 0; i < W*H; i++) gray[i] = data[i*4]*0.299+data[i*4+1]*0.587+data[i*4+2]*0.114;
+  const blur = gaussBlur3(gray, W, H);
+  const { mag, peak } = sobelMag(blur, W, H);
+  if (peak < 6) return null;
+  const lines = houghLines(mag, peak, W, H);
+  return bestQuad(lines, W, H);
+}
+
+function mkSmall(src: HTMLCanvasElement | HTMLVideoElement, W: number, H: number, maxDim: number) {
+  const s = maxDim / Math.max(W, H);
+  const sw = Math.round(W*s), sh = Math.round(H*s);
   const c = document.createElement('canvas');
   c.width = sw; c.height = sh;
-  (c.getContext('2d') as CanvasRenderingContext2D).drawImage(
-    src as CanvasImageSource, 0, 0, sw, sh
-  );
-  return { canvas: c, scale };
+  (c.getContext('2d') as CanvasRenderingContext2D).drawImage(src as CanvasImageSource, 0, 0, sw, sh);
+  return { c, s };
 }
 
 function defaultCorners(W: number, H: number): [Point, Point, Point, Point] {
   const p = 0.09;
-  return [
-    { x: W * p,       y: H * p },
-    { x: W * (1 - p), y: H * p },
-    { x: W * (1 - p), y: H * (1 - p) },
-    { x: W * p,       y: H * (1 - p) },
-  ];
+  return [{x:W*p,y:H*p},{x:W*(1-p),y:H*p},{x:W*(1-p),y:H*(1-p)},{x:W*p,y:H*(1-p)}];
 }
 
-function detectCorners(
-  cap: HTMLCanvasElement, W: number, H: number
-): [Point, Point, Point, Point] {
+function detectCornersLive(video: HTMLVideoElement): [Point, Point, Point, Point] | null {
+  const W = video.videoWidth, H = video.videoHeight;
+  if (!W || !H) return null;
   try {
-    const { canvas: small, scale } = downsample(cap, W, H, 480);
-    const result = findCornersInCanvas(small);
-    if (!result) return defaultCorners(W, H);
-    const inv = 1 / scale;
-    return result.map(c => ({ x: c.x * inv, y: c.y * inv })) as [Point, Point, Point, Point];
-  } catch { return defaultCorners(W, H); }
-}
-
-function detectCornersLive(
-  video: HTMLVideoElement, W: number, H: number
-): [Point, Point, Point, Point] | null {
-  try {
-    const { canvas: small, scale } = downsample(video, W, H, 320);
-    const result = findCornersInCanvas(small);
-    if (!result) return null;
-    const inv = 1 / scale;
-    return result.map(c => ({ x: c.x * inv, y: c.y * inv })) as [Point, Point, Point, Point];
+    const { c, s } = mkSmall(video, W, H, 320);
+    const r = detectInCanvas(c);
+    if (!r) return null;
+    const inv = 1/s;
+    return r.map(p => ({x:p.x*inv, y:p.y*inv})) as [Point, Point, Point, Point];
   } catch { return null; }
 }
 
-// ─── Perspective warp ─────────────────────────────────────────────────────────
+function detectCornersStatic(cap: HTMLCanvasElement): [Point, Point, Point, Point] {
+  const W = cap.width, H = cap.height;
+  try {
+    const { c, s } = mkSmall(cap, W, H, 500);
+    const r = detectInCanvas(c);
+    if (!r) return defaultCorners(W, H);
+    const inv = 1/s;
+    return r.map(p => ({x:p.x*inv, y:p.y*inv})) as [Point, Point, Point, Point];
+  } catch { return defaultCorners(W, H); }
+}
 
-function perspectiveWarp(src: HTMLCanvasElement, corners: [Point, Point, Point, Point]): string {
+// ─── Perspective warp + auto-enhance ─────────────────────────────────────────
+
+function warpAndEnhance(src: HTMLCanvasElement, corners: [Point, Point, Point, Point]): string {
   const [tl, tr, br, bl] = corners;
-  const wTop = Math.hypot(tr.x - tl.x, tr.y - tl.y);
-  const wBot = Math.hypot(br.x - bl.x, br.y - bl.y);
-  const hL   = Math.hypot(bl.x - tl.x, bl.y - tl.y);
-  const hR   = Math.hypot(br.x - tr.x, br.y - tr.y);
-
+  const wTop = Math.hypot(tr.x-tl.x, tr.y-tl.y), wBot = Math.hypot(br.x-bl.x, br.y-bl.y);
+  const hL   = Math.hypot(bl.x-tl.x, bl.y-tl.y), hR   = Math.hypot(br.x-tr.x, br.y-tr.y);
   const MAX = 2048;
   let outW = Math.round(Math.max(wTop, wBot));
   let outH = Math.round(Math.max(hL, hR));
   if (Math.max(outW, outH) > MAX) {
-    const s = MAX / Math.max(outW, outH);
-    outW = Math.round(outW * s); outH = Math.round(outH * s);
+    const s = MAX/Math.max(outW, outH); outW = Math.round(outW*s); outH = Math.round(outH*s);
   }
 
   const h = computeH(
-    [{ x: 0, y: 0 }, { x: outW, y: 0 }, { x: outW, y: outH }, { x: 0, y: outH }],
-    corners
+    [{x:0,y:0},{x:outW,y:0},{x:outW,y:outH},{x:0,y:outH}], corners
   );
-
-  const { data: sData } = src.getContext('2d')!.getImageData(0, 0, src.width, src.height);
+  const { data: sD } = src.getContext('2d')!.getImageData(0, 0, src.width, src.height);
   const sW = src.width, sH = src.height;
 
   const out = document.createElement('canvas');
   out.width = outW; out.height = outH;
   const outCtx = out.getContext('2d')!;
-  const outImg = outCtx.createImageData(outW, outH);
-  const oData  = outImg.data;
+  const img = outCtx.createImageData(outW, outH);
+  const oD  = img.data;
 
   for (let yo = 0; yo < outH; yo++) for (let xo = 0; xo < outW; xo++) {
     const { x: xi, y: yi } = applyH(h, xo, yo);
-    const x0 = Math.floor(xi), y0 = Math.floor(yi);
-    const x1 = x0 + 1,         y1 = y0 + 1;
-    const oi  = (yo * outW + xo) * 4;
-    if (x0 < 0 || y0 < 0 || x1 >= sW || y1 >= sH) {
-      oData[oi] = oData[oi+1] = oData[oi+2] = 255; oData[oi+3] = 255; continue;
-    }
-    const fx = xi - x0, fy = yi - y0;
-    const w00 = (1-fx)*(1-fy), w10 = fx*(1-fy), w01 = (1-fx)*fy, w11 = fx*fy;
-    const i00 = (y0*sW+x0)*4, i10 = (y0*sW+x1)*4;
-    const i01 = (y1*sW+x0)*4, i11 = (y1*sW+x1)*4;
-    oData[oi]   = sData[i00]*w00+sData[i10]*w10+sData[i01]*w01+sData[i11]*w11;
-    oData[oi+1] = sData[i00+1]*w00+sData[i10+1]*w10+sData[i01+1]*w01+sData[i11+1]*w11;
-    oData[oi+2] = sData[i00+2]*w00+sData[i10+2]*w10+sData[i01+2]*w01+sData[i11+2]*w11;
-    oData[oi+3] = 255;
+    const x0 = Math.floor(xi), y0 = Math.floor(yi), x1 = x0+1, y1 = y0+1;
+    const oi = (yo*outW+xo)*4;
+    if (x0<0||y0<0||x1>=sW||y1>=sH) { oD[oi]=oD[oi+1]=oD[oi+2]=255; oD[oi+3]=255; continue; }
+    const fx=xi-x0, fy=yi-y0;
+    const w00=(1-fx)*(1-fy), w10=fx*(1-fy), w01=(1-fx)*fy, w11=fx*fy;
+    const i00=(y0*sW+x0)*4, i10=(y0*sW+x1)*4, i01=(y1*sW+x0)*4, i11=(y1*sW+x1)*4;
+    oD[oi]  =sD[i00]*w00+sD[i10]*w10+sD[i01]*w01+sD[i11]*w11;
+    oD[oi+1]=sD[i00+1]*w00+sD[i10+1]*w10+sD[i01+1]*w01+sD[i11+1]*w11;
+    oD[oi+2]=sD[i00+2]*w00+sD[i10+2]*w10+sD[i01+2]*w01+sD[i11+2]*w11;
+    oD[oi+3]=255;
   }
+  outCtx.putImageData(img, 0, 0);
 
-  outCtx.putImageData(outImg, 0, 0);
+  // Auto-levels: stretch to 1%–99% percentiles per channel
+  const full = outCtx.getImageData(0, 0, outW, outH);
+  const d = full.data, N = outW * outH;
+  for (let ch = 0; ch < 3; ch++) {
+    const hist = new Int32Array(256);
+    for (let i = ch; i < d.length; i += 4) hist[d[i]]++;
+    const clip = N * 0.01;
+    let lo = 0, hi = 255, s = 0;
+    for (let v = 0; v < 256; v++) { s += hist[v]; if (s < clip) lo = v; else break; }
+    s = 0;
+    for (let v = 255; v >= 0; v--) { s += hist[v]; if (s < clip) hi = v; else break; }
+    if (hi <= lo) continue;
+    const sc = 255 / (hi - lo);
+    for (let i = ch; i < d.length; i += 4)
+      d[i] = Math.max(0, Math.min(255, Math.round((d[i] - lo) * sc)));
+  }
+  outCtx.putImageData(full, 0, 0);
   return out.toDataURL('image/jpeg', 0.95);
 }
 
-// ─── Zoom Mirror (shows magnified area around dragged corner) ─────────────────
+// ─── Zoom Mirror ──────────────────────────────────────────────────────────────
 
-const MIRROR_SIZE = 150;
-const MIRROR_ZOOM = 3.5;
+const SZ = 148, ZOOM = 4;
 
-const ZoomMirror: React.FC<{
-  srcCanvas: HTMLCanvasElement;
-  cornerPos: Point;
-  cornerIdx: number;
-}> = ({ srcCanvas, cornerPos, cornerIdx }) => {
+const ZoomMirror: React.FC<{ srcCanvas: HTMLCanvasElement; pos: Point; idx: number }> = ({
+  srcCanvas, pos, idx,
+}) => {
   const ref = useRef<HTMLCanvasElement>(null);
-
   useEffect(() => {
     const c = ref.current; if (!c) return;
     const ctx = c.getContext('2d')!;
-    const srcSz = MIRROR_SIZE / MIRROR_ZOOM;
-    const sx = Math.max(0, Math.min(srcCanvas.width  - srcSz, cornerPos.x - srcSz / 2));
-    const sy = Math.max(0, Math.min(srcCanvas.height - srcSz, cornerPos.y - srcSz / 2));
-
-    ctx.clearRect(0, 0, MIRROR_SIZE, MIRROR_SIZE);
-    ctx.drawImage(srcCanvas, sx, sy, srcSz, srcSz, 0, 0, MIRROR_SIZE, MIRROR_SIZE);
-
-    // Crosshair centered on actual corner position
-    const cx = Math.round((cornerPos.x - sx) * MIRROR_ZOOM);
-    const cy = Math.round((cornerPos.y - sy) * MIRROR_ZOOM);
-    ctx.strokeStyle = 'rgba(239,68,68,0.85)';
-    ctx.lineWidth = 1.5;
+    const srcSz = SZ / ZOOM;
+    const sx = Math.max(0, Math.min(srcCanvas.width  - srcSz, pos.x - srcSz/2));
+    const sy = Math.max(0, Math.min(srcCanvas.height - srcSz, pos.y - srcSz/2));
+    ctx.clearRect(0, 0, SZ, SZ);
+    ctx.drawImage(srcCanvas, sx, sy, srcSz, srcSz, 0, 0, SZ, SZ);
+    const cx = Math.round((pos.x - sx) * ZOOM), cy = Math.round((pos.y - sy) * ZOOM);
+    ctx.strokeStyle = 'rgba(239,68,68,0.9)'; ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(cx, 0); ctx.lineTo(cx, MIRROR_SIZE);
-    ctx.moveTo(0, cy); ctx.lineTo(MIRROR_SIZE, cy);
+    ctx.moveTo(cx, 0); ctx.lineTo(cx, SZ);
+    ctx.moveTo(0, cy); ctx.lineTo(SZ, cy);
     ctx.stroke();
     ctx.fillStyle = '#ef4444';
-    ctx.beginPath();
-    ctx.arc(cx, cy, 3, 0, Math.PI * 2);
-    ctx.fill();
-  }, [srcCanvas, cornerPos]);
+    ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI*2); ctx.fill();
+  }, [srcCanvas, pos]);
 
-  // Position mirror in the corner opposite the one being dragged
-  const offset: React.CSSProperties[] = [
-    { bottom: 12, right: 12 }, // TL → bottom-right
-    { bottom: 12, left:  12 }, // TR → bottom-left
-    { top:    12, left:  12 }, // BR → top-left
-    { top:    12, right: 12 }, // BL → top-right
+  const pos4: React.CSSProperties[] = [
+    {bottom:12,right:12},{bottom:12,left:12},{top:12,left:12},{top:12,right:12},
   ];
-
   return (
-    <canvas
-      ref={ref}
-      width={MIRROR_SIZE}
-      height={MIRROR_SIZE}
-      style={{
-        position: 'absolute',
-        ...offset[cornerIdx],
-        width:  MIRROR_SIZE,
-        height: MIRROR_SIZE,
-        borderRadius: 12,
-        border: '3px solid rgba(255,255,255,0.92)',
-        boxShadow: '0 6px 20px rgba(0,0,0,0.7)',
-        pointerEvents: 'none',
-        zIndex: 30,
-        imageRendering: 'pixelated',
-      }}
-    />
+    <canvas ref={ref} width={SZ} height={SZ} style={{
+      position:'absolute', ...pos4[idx], width:SZ, height:SZ,
+      borderRadius:10, border:'3px solid rgba(255,255,255,0.92)',
+      boxShadow:'0 6px 20px rgba(0,0,0,0.65)', pointerEvents:'none',
+      zIndex:30, imageRendering:'pixelated',
+    }} />
   );
 };
 
 // ─── Crop Editor ──────────────────────────────────────────────────────────────
 
-type CropEditorProps = {
-  imageUrl: string;
-  imgW: number;
-  imgH: number;
-  corners: [Point, Point, Point, Point];
-  onChange: (c: [Point, Point, Point, Point]) => void;
+const CropEditor: React.FC<{
+  imageUrl: string; imgW: number; imgH: number;
+  corners: [Point,Point,Point,Point];
+  onChange: (c:[Point,Point,Point,Point]) => void;
   srcCanvas: HTMLCanvasElement;
-};
-
-const CropEditor: React.FC<CropEditorProps> = ({
-  imageUrl, imgW, imgH, corners, onChange, srcCanvas,
-}) => {
+}> = ({ imageUrl, imgW, imgH, corners, onChange, srcCanvas }) => {
   const svgRef  = useRef<SVGSVGElement>(null);
   const dragRef = useRef<number | null>(null);
-  const [zoom, setZoom] = useState<{ idx: number; pos: Point } | null>(null);
+  const [zoom, setZoom] = useState<{idx:number;pos:Point}|null>(null);
 
-  const toSVGPt = (e: React.PointerEvent): Point => {
+  const toPt = (e: React.PointerEvent): Point => {
     const svg = svgRef.current!;
-    const pt  = svg.createSVGPoint();
-    pt.x = e.clientX; pt.y = e.clientY;
+    const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
     const tp = pt.matrixTransform(svg.getScreenCTM()!.inverse());
-    return { x: Math.max(0, Math.min(imgW, tp.x)), y: Math.max(0, Math.min(imgH, tp.y)) };
+    return {x:Math.max(0,Math.min(imgW,tp.x)), y:Math.max(0,Math.min(imgH,tp.y))};
   };
 
   const onDown = (e: React.PointerEvent, i: number) => {
     e.preventDefault();
     (e.target as Element).setPointerCapture(e.pointerId);
-    dragRef.current = i;
-    setZoom({ idx: i, pos: corners[i] });
+    dragRef.current = i; setZoom({idx:i, pos:corners[i]});
   };
-
   const onMove = (e: React.PointerEvent) => {
-    if (dragRef.current === null) return;
-    e.preventDefault();
-    const pt   = toSVGPt(e);
-    const next = [...corners] as [Point, Point, Point, Point];
-    next[dragRef.current] = pt;
-    onChange(next);
-    setZoom({ idx: dragRef.current, pos: pt });
+    if (dragRef.current===null) return; e.preventDefault();
+    const pt = toPt(e);
+    const next = [...corners] as [Point,Point,Point,Point];
+    next[dragRef.current] = pt; onChange(next); setZoom({idx:dragRef.current, pos:pt});
   };
+  const onUp = () => { dragRef.current=null; setZoom(null); };
 
-  const onUp = () => { dragRef.current = null; setZoom(null); };
-
-  const [tl, tr, br, bl] = corners;
+  const [tl,tr,br,bl] = corners;
   const pts = `${tl.x},${tl.y} ${tr.x},${tr.y} ${br.x},${br.y} ${bl.x},${bl.y}`;
-  const R   = Math.max(imgW, imgH) * 0.042;
-  const SW  = R * 0.20;
+  const R = Math.max(imgW,imgH)*0.042, SW = R*0.18;
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-      <img
-        src={imageUrl}
-        alt="Document"
-        style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', userSelect: 'none' }}
-        draggable={false}
-      />
-      <svg
-        ref={svgRef}
-        viewBox={`0 0 ${imgW} ${imgH}`}
-        preserveAspectRatio="xMidYMid meet"
-        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', touchAction: 'none' }}
-        onPointerMove={onMove}
-        onPointerUp={onUp}
-        onPointerCancel={onUp}
-      >
-        {/* Darken outside selection */}
+    <div style={{position:'relative',width:'100%',height:'100%'}}>
+      <img src={imageUrl} alt="Document" draggable={false}
+        style={{width:'100%',height:'100%',objectFit:'contain',display:'block',userSelect:'none'}} />
+      <svg ref={svgRef} viewBox={`0 0 ${imgW} ${imgH}`} preserveAspectRatio="xMidYMid meet"
+        style={{position:'absolute',inset:0,width:'100%',height:'100%',touchAction:'none'}}
+        onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
         <mask id="dm">
-          <rect width={imgW} height={imgH} fill="white" />
-          <polygon points={pts} fill="black" />
+          <rect width={imgW} height={imgH} fill="white"/>
+          <polygon points={pts} fill="black"/>
         </mask>
-        <rect width={imgW} height={imgH} fill="rgba(0,0,0,0.5)" mask="url(#dm)" />
-
-        {/* Document outline */}
-        <polygon
-          points={pts}
-          fill="rgba(59,130,246,0.07)"
-          stroke="#3b82f6"
-          strokeWidth={SW}
-          strokeLinejoin="round"
-        />
-
-        {/* Edge lines (easier to see exact shape) */}
-        {([[tl,tr],[tr,br],[br,bl],[bl,tl]] as const).map(([a,b],i) => (
-          <line key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-            stroke="rgba(255,255,255,0.5)" strokeWidth={SW * 0.5} />
-        ))}
-
-        {/* Corner handles — 0=TL 1=TR 2=BR 3=BL */}
-        {corners.map((c, i) => (
-          <g key={i} onPointerDown={e => onDown(e, i)} style={{ cursor: 'grab' }}>
-            {/* Larger invisible hit area */}
-            <circle cx={c.x} cy={c.y} r={R * 1.6} fill="transparent" />
-            {/* Outer ring */}
-            <circle cx={c.x} cy={c.y} r={R} fill="#2563eb" stroke="white" strokeWidth={SW} />
-            {/* Crosshair */}
-            <line x1={c.x - R*0.4} y1={c.y} x2={c.x + R*0.4} y2={c.y}
-              stroke="white" strokeWidth={SW * 0.6} strokeLinecap="round" />
-            <line x1={c.x} y1={c.y - R*0.4} x2={c.x} y2={c.y + R*0.4}
-              stroke="white" strokeWidth={SW * 0.6} strokeLinecap="round" />
+        <rect width={imgW} height={imgH} fill="rgba(0,0,0,0.48)" mask="url(#dm)"/>
+        <polygon points={pts} fill="rgba(251,191,36,0.1)"
+          stroke="#fbbf24" strokeWidth={SW} strokeLinejoin="round"/>
+        {corners.map((c,i) => (
+          <g key={i} onPointerDown={e=>onDown(e,i)} style={{cursor:'grab'}}>
+            <circle cx={c.x} cy={c.y} r={R*1.6} fill="transparent"/>
+            <circle cx={c.x} cy={c.y} r={R} fill="#fbbf24" stroke="white" strokeWidth={SW*0.9}/>
+            <line x1={c.x-R*0.38} y1={c.y} x2={c.x+R*0.38} y2={c.y}
+              stroke="white" strokeWidth={SW*0.6} strokeLinecap="round"/>
+            <line x1={c.x} y1={c.y-R*0.38} x2={c.x} y2={c.y+R*0.38}
+              stroke="white" strokeWidth={SW*0.6} strokeLinecap="round"/>
           </g>
         ))}
       </svg>
-
-      {/* Zoom mirror when dragging */}
-      {zoom && (
-        <ZoomMirror
-          srcCanvas={srcCanvas}
-          cornerPos={zoom.pos}
-          cornerIdx={zoom.idx}
-        />
-      )}
+      {zoom && <ZoomMirror srcCanvas={srcCanvas} pos={zoom.pos} idx={zoom.idx}/>}
     </div>
   );
 };
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
+const STABLE_FRAMES = 4; // × 350 ms = 1.4 s to auto-capture
+
 const App: React.FC = () => {
   const videoRef       = useRef<HTMLVideoElement>(null);
   const capturedCanvas = useRef<HTMLCanvasElement | null>(null);
   const streamRef      = useRef<MediaStream | null>(null);
-  const stableCount    = useRef(0);
+  const prevCornersRef = useRef<[Point,Point,Point,Point]|null>(null);
+  const stableRef      = useRef(0);
 
   const [mode,           setMode]           = useState<Mode>('camera');
-  const [videoDims,      setVideoDims]      = useState({ w: 1920, h: 1080 });
-  const [liveCorners,    setLiveCorners]    = useState<[Point,Point,Point,Point] | null>(null);
-  const [capturedImage,  setCapturedImage]  = useState<string | null>(null);
-  const [imgSize,        setImgSize]        = useState({ w: 0, h: 0 });
-  const [corners,        setCorners]        = useState<[Point,Point,Point,Point] | null>(null);
-  const [processedImage, setProcessedImage] = useState<string | null>(null);
+  const [vDims,          setVDims]          = useState({w:1920,h:1080});
+  const [liveCorners,    setLiveCorners]    = useState<[Point,Point,Point,Point]|null>(null);
+  const [stableCount,    setStableCount]    = useState(0);
+  const [capturedImage,  setCapturedImage]  = useState<string|null>(null);
+  const [imgSize,        setImgSize]        = useState({w:0,h:0});
+  const [corners,        setCorners]        = useState<[Point,Point,Point,Point]|null>(null);
+  const [processedImage, setProcessedImage] = useState<string|null>(null);
   const [processing,     setProcessing]     = useState(false);
-  const [error,          setError]          = useState<string | null>(null);
+  const [error,          setError]          = useState<string|null>(null);
   const [savedMsg,       setSavedMsg]       = useState('');
-
-  // ── camera ─────────────────────────────────────────────────────────────────
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach(t => t.stop());
@@ -418,8 +412,8 @@ const App: React.FC = () => {
     setError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } },
-        audio: false,
+        video:{facingMode:{ideal:'environment'},width:{ideal:3840},height:{ideal:2160}},
+        audio:false,
       });
       streamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
@@ -430,28 +424,7 @@ const App: React.FC = () => {
 
   useEffect(() => { startCamera(); return stopCamera; }, [startCamera, stopCamera]);
 
-  // ── live document detection ────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (mode !== 'camera') { setLiveCorners(null); return; }
-    const id = setInterval(() => {
-      const v = videoRef.current;
-      if (!v || v.readyState < 2) return;
-      const W = v.videoWidth, H = v.videoHeight;
-      if (!W || !H) return;
-      const found = detectCornersLive(v, W, H);
-      if (found) {
-        stableCount.current++;
-        if (stableCount.current >= 2) setLiveCorners(found);
-      } else {
-        stableCount.current = 0;
-        setLiveCorners(null);
-      }
-    }, 350);
-    return () => clearInterval(id);
-  }, [mode]);
-
-  // ── capture ────────────────────────────────────────────────────────────────
+  // ── capture (can be called manually or by auto-capture) ───────────────────
 
   const capture = useCallback(() => {
     const v = videoRef.current;
@@ -461,91 +434,111 @@ const App: React.FC = () => {
     cap.width = W; cap.height = H;
     cap.getContext('2d')!.drawImage(v, 0, 0);
     capturedCanvas.current = cap;
-
-    // Use live-detected corners as starting point if available, else detect on full frame
-    const detected = liveCorners
-      ? liveCorners
-      : detectCorners(cap, W, H);
-
-    setCorners(detected);
-    setImgSize({ w: W, h: H });
+    // Use live corners if we had a confident detection, else re-detect on full frame
+    const det = liveCorners ?? detectCornersStatic(cap);
+    setCorners(det);
+    setImgSize({w:W, h:H});
     setCapturedImage(cap.toDataURL('image/jpeg', 0.92));
     setMode('crop');
     stopCamera();
   }, [liveCorners, stopCamera]);
 
-  const retake = useCallback(() => {
-    setCapturedImage(null);
-    setProcessedImage(null);
-    setSavedMsg('');
-    capturedCanvas.current = null;
-    setMode('camera');
-    startCamera();
-  }, [startCamera]);
+  // ── live detection loop ───────────────────────────────────────────────────
 
-  // ── crop & warp ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (mode !== 'camera') { setLiveCorners(null); setStableCount(0); return; }
+    const id = setInterval(() => {
+      const v = videoRef.current;
+      if (!v || v.readyState < 2) return;
+      const found = detectCornersLive(v);
+      if (found) {
+        const prev = prevCornersRef.current;
+        const stable = prev !== null && found.every((c, i) =>
+          Math.hypot(c.x - prev[i].x, c.y - prev[i].y) < 22
+        );
+        if (stable) {
+          stableRef.current = Math.min(stableRef.current + 1, STABLE_FRAMES);
+        } else {
+          stableRef.current = 0;
+        }
+        prevCornersRef.current = found;
+        setLiveCorners(found);
+        setStableCount(stableRef.current);
+        if (stableRef.current >= STABLE_FRAMES) {
+          stableRef.current = 0;
+          // Schedule capture on next tick so state can flush
+          setTimeout(() => {
+            const vv = videoRef.current;
+            if (vv && vv.readyState >= 2) capture();
+          }, 0);
+        }
+      } else {
+        stableRef.current = 0;
+        prevCornersRef.current = null;
+        setLiveCorners(null);
+        setStableCount(0);
+      }
+    }, 350);
+    return () => clearInterval(id);
+  }, [mode, capture]);
+
+  const retake = useCallback(() => {
+    setCapturedImage(null); setProcessedImage(null); setSavedMsg('');
+    capturedCanvas.current = null;
+    setMode('camera'); startCamera();
+  }, [startCamera]);
 
   const applyCrop = useCallback(async () => {
     if (!capturedCanvas.current || !corners) return;
     setProcessing(true);
     await new Promise(r => setTimeout(r, 30));
     try {
-      setProcessedImage(perspectiveWarp(capturedCanvas.current, corners));
+      setProcessedImage(warpAndEnhance(capturedCanvas.current, corners));
       setMode('preview');
-    } finally {
-      setProcessing(false);
-    }
+    } finally { setProcessing(false); }
   }, [corners]);
-
-  // ── download ───────────────────────────────────────────────────────────────
 
   const downloadImage = useCallback(() => {
     if (!processedImage) return;
-    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const ts = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
     const a  = document.createElement('a');
-    a.href     = processedImage;
-    a.download = `scan_${ts}.jpg`;
+    a.href = processedImage; a.download = `scan_${ts}.jpg`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setSavedMsg('Saved!');
-    setTimeout(() => setSavedMsg(''), 2000);
+    setSavedMsg('Saved!'); setTimeout(() => setSavedMsg(''), 2000);
   }, [processedImage]);
 
-  // ── render ─────────────────────────────────────────────────────────────────
+  // ── styles ────────────────────────────────────────────────────────────────
 
-  const docDetected = liveCorners !== null;
-  const [vl, vt, vr, vb] = [8, 8, 92, 92]; // guide frame bounds (% of viewBox)
-  const livePts = liveCorners
-    ? liveCorners.map(c => `${(c.x / videoDims.w) * 100},${(c.y / videoDims.h) * 100}`).join(' ')
-    : '';
+  const detected = liveCorners !== null;
+  const progress = stableCount / STABLE_FRAMES; // 0–1
+
+  // SVG circle for progress ring around capture button (r=34, circumference≈213.6)
+  const CIRC = 2 * Math.PI * 34;
+  const dash  = CIRC * progress;
 
   return (
     <div style={{
-      height: '100dvh', display: 'flex', flexDirection: 'column',
-      background: '#0f172a', color: '#f1f5f9',
-      fontFamily: 'system-ui, -apple-system, sans-serif',
-      userSelect: 'none', overflow: 'hidden',
+      height:'100dvh', display:'flex', flexDirection:'column',
+      background:'#0f172a', color:'#f1f5f9',
+      fontFamily:'system-ui,-apple-system,sans-serif',
+      userSelect:'none', overflow:'hidden',
     }}>
       {/* Header */}
       <div style={{
-        padding: '10px 16px', fontSize: '15px', fontWeight: 700,
-        letterSpacing: '0.08em', textAlign: 'center', color: '#94a3b8',
-        flexShrink: 0, position: 'relative', display: 'flex',
-        alignItems: 'center', justifyContent: 'center',
+        padding:'10px 16px', fontSize:'15px', fontWeight:700,
+        letterSpacing:'0.08em', textAlign:'center', color:'#64748b',
+        flexShrink:0, position:'relative',
+        display:'flex', alignItems:'center', justifyContent:'center',
       }}>
         {mode !== 'camera' && (
-          <button
-            onClick={retake}
-            style={{
-              position: 'absolute', left: 12, background: 'none', border: 'none',
-              color: '#64748b', fontSize: '13px', cursor: 'pointer', padding: '4px 8px',
-            }}
-          >
-            ✕ Retake
-          </button>
+          <button onClick={retake} style={{
+            position:'absolute', left:12, background:'none', border:'none',
+            color:'#64748b', fontSize:'13px', cursor:'pointer', padding:'4px 8px',
+          }}>✕ Retake</button>
         )}
         DOC SCANNER
-        {mode === 'crop' && (
-          <span style={{ position: 'absolute', right: 12, fontSize: '11px', color: '#64748b', fontWeight: 400 }}>
+        {mode==='crop' && (
+          <span style={{position:'absolute',right:12,fontSize:'11px',color:'#475569',fontWeight:400}}>
             drag corners
           </span>
         )}
@@ -553,113 +546,93 @@ const App: React.FC = () => {
 
       {/* Viewport */}
       <div style={{
-        flex: 1, position: 'relative', overflow: 'hidden',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: '#000',
+        flex:1, position:'relative', overflow:'hidden',
+        display:'flex', alignItems:'center', justifyContent:'center',
+        background:'#000',
       }}>
         {error ? (
-          <div style={{ padding: '32px', textAlign: 'center', color: '#f87171', fontSize: '15px', lineHeight: 1.65 }}>
+          <div style={{padding:'32px',textAlign:'center',color:'#f87171',fontSize:'15px',lineHeight:1.65}}>
             {error}
           </div>
         ) : mode === 'camera' ? (
           <>
             <video
               ref={videoRef}
-              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+              style={{width:'100%',height:'100%',objectFit:'contain'}}
               autoPlay playsInline muted
               onLoadedMetadata={() => {
                 const v = videoRef.current;
-                if (v) setVideoDims({ w: v.videoWidth, h: v.videoHeight });
+                if (v) setVDims({w:v.videoWidth, h:v.videoHeight});
               }}
             />
-            {/* Live detection overlay — SVG viewBox matches video resolution */}
+            {/* Live detection overlay — viewBox matches actual video frame dimensions */}
             <svg
-              viewBox={`0 0 100 100`}
-              preserveAspectRatio="none"
-              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+              viewBox={`0 0 ${vDims.w} ${vDims.h}`}
+              preserveAspectRatio="xMidYMid meet"
+              style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}}
             >
-              {docDetected && livePts ? (
-                // Detected document outline — green, animated
+              {liveCorners ? (
                 <polygon
-                  points={livePts}
-                  fill="rgba(34,197,94,0.12)"
-                  stroke="#22c55e"
-                  strokeWidth="0.6"
+                  points={liveCorners.map(c=>`${c.x},${c.y}`).join(' ')}
+                  fill="rgba(251,191,36,0.15)"
+                  stroke="#fbbf24"
+                  strokeWidth={Math.max(vDims.w,vDims.h)*0.004}
                   strokeLinejoin="round"
-                  style={{ animation: 'pulse 1.4s ease-in-out infinite' }}
                 />
               ) : (
-                // Neutral guide frame when nothing detected
-                <>
-                  <rect x={vl} y={vt} width={vr-vl} height={vb-vt}
-                    fill="none" stroke="rgba(255,255,255,0.18)"
-                    strokeWidth="0.3" strokeDasharray="3 2" />
-                  {([
-                    { bx: vl, by: vt, dx:  1, dy:  1 },
-                    { bx: vr, by: vt, dx: -1, dy:  1 },
-                    { bx: vr, by: vb, dx: -1, dy: -1 },
-                    { bx: vl, by: vb, dx:  1, dy: -1 },
-                  ] as const).map(({ bx, by, dx, dy }, i) => (
+                // Neutral corner brackets when nothing detected
+                (() => {
+                  const bx = vDims.w*0.08, by = vDims.h*0.10;
+                  const bw = vDims.w*0.84, bh = vDims.h*0.80;
+                  const arm = Math.min(vDims.w,vDims.h)*0.06;
+                  const sw  = Math.max(vDims.w,vDims.h)*0.004;
+                  return ([
+                    [bx,by,1,1],[bx+bw,by,-1,1],[bx+bw,by+bh,-1,-1],[bx,by+bh,1,-1]
+                  ] as [number,number,number,number][]).map(([x,y,dx,dy],i) => (
                     <g key={i}>
-                      <line x1={bx} y1={by} x2={bx + dx*6} y2={by} stroke="rgba(255,255,255,0.4)" strokeWidth="0.9" strokeLinecap="round" />
-                      <line x1={bx} y1={by} x2={bx} y2={by + dy*6} stroke="rgba(255,255,255,0.4)" strokeWidth="0.9" strokeLinecap="round" />
+                      <line x1={x} y1={y} x2={x+dx*arm} y2={y} stroke="rgba(255,255,255,0.35)" strokeWidth={sw} strokeLinecap="round"/>
+                      <line x1={x} y1={y} x2={x} y2={y+dy*arm} stroke="rgba(255,255,255,0.35)" strokeWidth={sw} strokeLinecap="round"/>
                     </g>
-                  ))}
-                </>
+                  ));
+                })()
               )}
             </svg>
-            {/* Status hint */}
-            <div style={{
-              position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)',
-              color: docDetected ? '#86efac' : 'rgba(255,255,255,0.45)',
-              fontSize: '13px', pointerEvents: 'none', whiteSpace: 'nowrap',
-              transition: 'color 0.3s',
-            }}>
-              {docDetected ? 'Document detected — tap to capture' : 'Point camera at a document'}
-            </div>
           </>
-        ) : mode === 'crop' && capturedImage && corners && imgSize.w > 0 ? (
+        ) : mode==='crop' && capturedImage && corners && imgSize.w > 0 ? (
           <>
             <CropEditor
               imageUrl={capturedImage}
-              imgW={imgSize.w}
-              imgH={imgSize.h}
+              imgW={imgSize.w} imgH={imgSize.h}
               corners={corners}
               onChange={c => setCorners(c)}
               srcCanvas={capturedCanvas.current!}
             />
             {processing && (
               <div style={{
-                position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.72)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: '#fff', fontSize: '16px', gap: 10,
+                position:'absolute',inset:0,background:'rgba(0,0,0,0.72)',
+                display:'flex',alignItems:'center',justifyContent:'center',
+                color:'#fff',fontSize:'16px',gap:10,
               }}>
-                <svg width="22" height="22" viewBox="0 0 22 22"
-                  style={{ animation: 'spin 0.9s linear infinite' }}>
-                  <circle cx="11" cy="11" r="9" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="2.5" />
-                  <path d="M11 2 A9 9 0 0 1 20 11" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" />
+                <svg width="22" height="22" viewBox="0 0 22 22" style={{animation:'spin 0.9s linear infinite'}}>
+                  <circle cx="11" cy="11" r="9" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="2.5"/>
+                  <path d="M11 2 A9 9 0 0 1 20 11" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
                 </svg>
                 Processing…
               </div>
             )}
           </>
-        ) : mode === 'preview' && processedImage ? (
+        ) : mode==='preview' && processedImage ? (
           <>
-            <img
-              src={processedImage}
-              alt="Scanned"
-              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-            />
+            <img src={processedImage} alt="Scan"
+              style={{width:'100%',height:'100%',objectFit:'contain'}}/>
             {savedMsg && (
               <div style={{
-                position: 'absolute', top: '50%', left: '50%',
-                transform: 'translate(-50%,-50%)',
-                background: 'rgba(0,0,0,0.78)', color: '#fff',
-                padding: '12px 28px', borderRadius: '12px', fontSize: '15px',
-                pointerEvents: 'none',
-              }}>
-                {savedMsg}
-              </div>
+                position:'absolute',top:'50%',left:'50%',
+                transform:'translate(-50%,-50%)',
+                background:'rgba(0,0,0,0.78)',color:'#fff',
+                padding:'12px 28px',borderRadius:12,fontSize:15,
+                pointerEvents:'none',
+              }}>{savedMsg}</div>
             )}
           </>
         ) : null}
@@ -667,64 +640,65 @@ const App: React.FC = () => {
 
       {/* Controls */}
       <div style={{
-        padding: '18px 24px 38px', display: 'flex', alignItems: 'center',
-        justifyContent: 'center', gap: 16, flexShrink: 0, background: '#0f172a',
+        padding:'18px 24px 38px',display:'flex',alignItems:'center',
+        justifyContent:'center',gap:16,flexShrink:0,background:'#0f172a',
       }}>
-        {mode === 'camera' ? (
-          <button
-            onClick={capture}
-            aria-label="Capture"
-            style={{
-              width: 72, height: 72, borderRadius: '50%',
-              border: `4px solid ${docDetected ? '#22c55e' : '#f1f5f9'}`,
-              background: 'transparent', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              transition: 'border-color 0.3s',
-            }}
-          >
-            <div style={{
-              width: 54, height: 54, borderRadius: '50%',
-              background: docDetected ? '#22c55e' : '#f1f5f9',
-              transition: 'background 0.3s',
-            }} />
-          </button>
-        ) : mode === 'crop' ? (
+        {mode==='camera' ? (
+          <div style={{position:'relative',width:80,height:80,display:'flex',alignItems:'center',justifyContent:'center'}}>
+            {/* Animated progress ring */}
+            <svg width="80" height="80" style={{position:'absolute',inset:0,transform:'rotate(-90deg)'}}>
+              <circle cx="40" cy="40" r="34" fill="none"
+                stroke={detected ? '#fbbf24' : 'rgba(255,255,255,0.15)'}
+                strokeWidth="3" strokeDasharray={`${CIRC}`}
+                strokeDashoffset={CIRC - dash}
+                style={{transition:'stroke-dashoffset 0.35s ease, stroke 0.3s'}}
+              />
+            </svg>
+            <button
+              onClick={capture}
+              aria-label="Capture"
+              style={{
+                width:68,height:68,borderRadius:'50%',
+                border:`4px solid ${detected?'#fbbf24':'rgba(255,255,255,0.6)'}`,
+                background:'transparent',cursor:'pointer',
+                display:'flex',alignItems:'center',justifyContent:'center',
+                transition:'border-color 0.3s',
+              }}
+            >
+              <div style={{
+                width:52,height:52,borderRadius:'50%',
+                background:detected?'#fbbf24':'rgba(255,255,255,0.85)',
+                transition:'background 0.3s',
+              }}/>
+            </button>
+          </div>
+        ) : mode==='crop' ? (
           <>
-            <button
-              onClick={retake}
-              style={btnStyle('dark')}
-            >Retake</button>
-            <button
-              onClick={applyCrop}
-              disabled={processing}
-              style={btnStyle('blue')}
-            >{processing ? 'Processing…' : 'Crop & Apply'}</button>
+            <button onClick={retake}     style={btn('dark')}>Retake</button>
+            <button onClick={applyCrop}  style={btn('gold')} disabled={processing}>
+              {processing ? 'Processing…' : 'Crop & Apply'}
+            </button>
           </>
         ) : (
           <>
-            <button onClick={retake} style={btnStyle('dark')}>Retake</button>
-            <button onClick={downloadImage} style={btnStyle('blue')}>
-              ↓ Download
-            </button>
+            <button onClick={retake}         style={btn('dark')}>Retake</button>
+            <button onClick={downloadImage}  style={btn('gold')}>↓ Download</button>
           </>
         )}
       </div>
 
-      <style>{`
-        @keyframes spin   { to { transform: rotate(360deg); } }
-        @keyframes pulse  { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
-      `}</style>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 };
 
-function btnStyle(variant: 'dark' | 'blue'): React.CSSProperties {
+function btn(v: 'dark'|'gold'): React.CSSProperties {
   return {
-    padding: '13px 28px', borderRadius: 12, border: 'none',
-    fontSize: 15, fontWeight: 600, cursor: 'pointer', letterSpacing: '0.02em',
-    background: variant === 'blue' ? '#2563eb' : '#1e293b',
-    color: variant === 'blue' ? '#fff' : '#cbd5e1',
-    minWidth: variant === 'blue' ? 136 : undefined,
+    padding:'13px 28px', borderRadius:12, border:'none',
+    fontSize:15, fontWeight:600, cursor:'pointer',
+    background: v==='gold' ? '#d97706' : '#1e293b',
+    color: v==='gold' ? '#fff' : '#94a3b8',
+    minWidth: v==='gold' ? 136 : undefined,
   };
 }
 
