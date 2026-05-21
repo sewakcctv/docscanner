@@ -363,22 +363,32 @@ const CropEditor: React.FC<{
 }> = ({imageUrl,imgW,imgH,corners,onChange,srcCanvas}) => {
   const svgRef=useRef<SVGSVGElement>(null);
   const drag=useRef<number|null>(null);
+  const dragOff=useRef<Point>({x:0,y:0});
   const [zoom,setZoom]=useState<{idx:number;pos:Point}|null>(null);
 
-  const toPt=(e:React.PointerEvent): Point => {
+  const toSvgPt=(e:React.PointerEvent): Point => {
     const svg=svgRef.current!;
     const pt=svg.createSVGPoint(); pt.x=e.clientX; pt.y=e.clientY;
     const tp=pt.matrixTransform(svg.getScreenCTM()!.inverse());
-    return {x:Math.max(0,Math.min(imgW,tp.x)),y:Math.max(0,Math.min(imgH,tp.y))};
+    return {x:tp.x, y:tp.y};
   };
 
   const onDown=(e:React.PointerEvent,i:number)=>{
     e.preventDefault();(e.target as Element).setPointerCapture(e.pointerId);
-    drag.current=i;setZoom({idx:i,pos:corners[i]});
+    drag.current=i;
+    // Record offset between touch point and handle centre so the handle
+    // doesn't jump to the finger on the first move event.
+    const pt=toSvgPt(e);
+    dragOff.current={x:pt.x-corners[i].x, y:pt.y-corners[i].y};
+    setZoom({idx:i,pos:corners[i]});
   };
   const onMove=(e:React.PointerEvent)=>{
     if (drag.current===null) return; e.preventDefault();
-    const pt=toPt(e);
+    const raw=toSvgPt(e);
+    const pt={
+      x:Math.max(0,Math.min(imgW, raw.x-dragOff.current.x)),
+      y:Math.max(0,Math.min(imgH, raw.y-dragOff.current.y)),
+    };
     const n=[...corners] as [Point,Point,Point,Point];
     n[drag.current]=pt; onChange(n); setZoom({idx:drag.current,pos:pt});
   };
@@ -386,8 +396,8 @@ const CropEditor: React.FC<{
 
   const [tl,tr,br,bl]=corners;
   const pts=`${tl.x},${tl.y} ${tr.x},${tr.y} ${br.x},${br.y} ${bl.x},${bl.y}`;
-  const R=Math.max(imgW,imgH)*0.032;
-  const SW=Math.max(imgW,imgH)*0.006;
+  const R=Math.max(imgW,imgH)*0.018;   // visual radius — noticeably smaller
+  const SW=Math.max(imgW,imgH)*0.005;
 
   return (
     <div style={{position:'relative',width:'100%',height:'100%'}}>
@@ -405,11 +415,11 @@ const CropEditor: React.FC<{
         {/* Yellow outline */}
         <polygon points={pts} fill="rgba(251,191,36,0.08)"
           stroke="#fbbf24" strokeWidth={SW} strokeLinejoin="round"/>
-        {/* Corner handles — simple filled circles, no clutter */}
+        {/* Corner handles — large transparent touch area, small visual dot */}
         {corners.map((c,i)=>(
           <g key={i} onPointerDown={e=>onDown(e,i)} style={{cursor:'grab'}}>
-            <circle cx={c.x} cy={c.y} r={R*1.8} fill="transparent"/>
-            <circle cx={c.x} cy={c.y} r={R} fill="#fbbf24" stroke="white" strokeWidth={SW*0.7}/>
+            <circle cx={c.x} cy={c.y} r={R*3} fill="transparent"/>
+            <circle cx={c.x} cy={c.y} r={R} fill="#fbbf24" stroke="white" strokeWidth={SW*0.8}/>
           </g>
         ))}
       </svg>
@@ -644,9 +654,10 @@ const App: React.FC = () => {
         ):null}
       </div>
 
-      {/* Controls */}
+      {/* Controls — paddingBottom includes Android/iOS nav-bar safe area */}
       <div style={{
-        padding:'18px 24px 38px',display:'flex',alignItems:'center',
+        padding:'18px 24px 0',paddingBottom:'max(28px, env(safe-area-inset-bottom, 20px))',
+        display:'flex',alignItems:'center',
         justifyContent:'center',gap:16,flexShrink:0,background:'#0f172a',
       }}>
         {mode==='camera'?(
