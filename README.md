@@ -1,20 +1,35 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Doc Scanner
 
-# Run and deploy your AI Studio app
+A minimal document scanner web app built for mobile. Open it in your phone's browser, point the camera at a document, capture it, and save it to your gallery.
 
-This contains everything you need to run your app locally.
+## Features
 
-View your app in AI Studio: https://ai.studio/apps/drive/1s06HNd827gXQJZwwCLKKZw3fehMMo3eU
+- Uses the rear camera for best document quality
+- Capture with one tap
+- Save via the system share sheet (saves to gallery on Android) or fallback download
+- Works offline after first load (no backend needed)
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
+**Prerequisites:** Node.js
 
+```bash
+npm install
+npm run dev
+```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+Then open `http://localhost:3000` on your phone (must be on the same Wi-Fi network, or use a tunnel like `ngrok`).
+
+## Build for Production
+
+```bash
+npm run build
+```
+
+Deploy the `dist/` folder to any static hosting (GitHub Pages, Netlify, Vercel, etc.).
+
+## Notes
+
+- Camera permission must be granted in the browser
+- On Android Chrome, the Web Share API saves directly to the gallery
+- On browsers without share support, a download is triggered instead (saves to Downloads folder)
