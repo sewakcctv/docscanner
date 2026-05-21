@@ -1,0 +1,25 @@
+{
+  "name": "Doc Scanner",
+  "short_name": "Scanner",
+  "description": "Scan and crop documents with your phone camera",
+  "start_url": "/docscanner/",
+  "scope": "/docscanner/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#111827",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/docscanner/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/docscanner/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

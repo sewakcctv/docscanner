@@ -4,10 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Doc Scanner</title>
+    <meta name="description" content="Scan and crop documents with your phone camera" />
     <meta name="theme-color" content="#111827" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Scanner" />
+    <link rel="manifest" href="/docscanner/manifest.json" />
+    <link rel="apple-touch-icon" href="/docscanner/icon.svg" />
+    <link rel="icon" type="image/svg+xml" href="/docscanner/icon.svg" />
     <style>
       *, *::before, *::after { box-sizing: border-box; }
       html, body { margin: 0; padding: 0; height: 100%; background: #111827; }
@@ -17,5 +22,12 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/docscanner/sw.js').catch(() => {});
+        });
+      }
+    </script>
   </body>
 </html>

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Background -->
+  <rect width="512" height="512" rx="80" fill="#0f172a"/>
+  <!-- Document shadow -->
+  <rect x="132" y="108" width="256" height="316" rx="10" fill="#1e293b"/>
+  <!-- Document body -->
+  <rect x="124" y="100" width="256" height="316" rx="10" fill="#f8fafc"/>
+  <!-- Document header accent -->
+  <rect x="124" y="100" width="256" height="44" rx="10" fill="#e2e8f0"/>
+  <rect x="124" y="122" width="256" height="22" fill="#e2e8f0"/>
+  <!-- Text lines -->
+  <rect x="158" y="170" width="180" height="11" rx="5.5" fill="#94a3b8"/>
+  <rect x="158" y="196" width="196" height="10" rx="5" fill="#cbd5e1"/>
+  <rect x="158" y="218" width="168" height="10" rx="5" fill="#cbd5e1"/>
+  <rect x="158" y="240" width="196" height="10" rx="5" fill="#cbd5e1"/>
+  <rect x="158" y="262" width="148" height="10" rx="5" fill="#cbd5e1"/>
+  <rect x="158" y="292" width="196" height="10" rx="5" fill="#e2e8f0"/>
+  <rect x="158" y="314" width="180" height="10" rx="5" fill="#e2e8f0"/>
+  <rect x="158" y="336" width="120" height="10" rx="5" fill="#e2e8f0"/>
+  <!-- Corner scan brackets (yellow) -->
+  <path d="M52 52 L52 116" stroke="#facc15" stroke-width="20" stroke-linecap="round" fill="none"/>
+  <path d="M52 52 L116 52" stroke="#facc15" stroke-width="20" stroke-linecap="round" fill="none"/>
+  <path d="M460 52 L460 116" stroke="#facc15" stroke-width="20" stroke-linecap="round" fill="none"/>
+  <path d="M460 52 L396 52" stroke="#facc15" stroke-width="20" stroke-linecap="round" fill="none"/>
+  <path d="M460 460 L460 396" stroke="#facc15" stroke-width="20" stroke-linecap="round" fill="none"/>
+  <path d="M460 460 L396 460" stroke="#facc15" stroke-width="20" stroke-linecap="round" fill="none"/>
+  <path d="M52 460 L52 396" stroke="#facc15" stroke-width="20" stroke-linecap="round" fill="none"/>
+  <path d="M52 460 L116 460" stroke="#facc15" stroke-width="20" stroke-linecap="round" fill="none"/>
+</svg>
