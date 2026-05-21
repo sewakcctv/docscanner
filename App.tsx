@@ -31,89 +31,74 @@ function applyH(h: number[], x: number, y: number): Point {
   return {x:(h[0]*x+h[1]*y+h[2])/d,y:(h[3]*x+h[4]*y+h[5])/d};
 }
 
-// ─── Canny edge detection ─────────────────────────────────────────────────────
+// ─── Brightness-blob detection helpers ───────────────────────────────────────
 
-const G5 = [1,4,7,4,1,4,16,26,16,4,7,26,41,26,7,4,16,26,16,4,1,4,7,4,1]; // sum=273
-
-function gaussBlur5(src: Uint8Array, W: number, H: number): Uint8Array {
-  const o = new Uint8Array(W*H);
-  for (let y=2;y<H-2;y++) for (let x=2;x<W-2;x++) {
-    let s=0;
-    for (let ky=-2;ky<=2;ky++) for (let kx=-2;kx<=2;kx++)
-      s += src[(y+ky)*W+(x+kx)] * G5[(ky+2)*5+(kx+2)];
-    o[y*W+x] = s/273;
-  }
-  return o;
-}
-
-function bilerp(arr: Float32Array, W: number, H: number, x: number, y: number): number {
-  const x0=Math.floor(x),y0=Math.floor(y),x1=x0+1,y1=y0+1;
-  if (x0<0||y0<0||x1>=W||y1>=H) return 0;
-  const fx=x-x0,fy=y-y0;
-  return arr[y0*W+x0]*(1-fx)*(1-fy)+arr[y0*W+x1]*fx*(1-fy)
-        +arr[y1*W+x0]*(1-fx)*fy    +arr[y1*W+x1]*fx*fy;
-}
-
-function cannyEdges(src: Uint8Array, W: number, H: number): Uint8Array {
-  const blur = gaussBlur5(src, W, H);
-  const mag = new Float32Array(W*H);
-  const gxA = new Float32Array(W*H), gyA = new Float32Array(W*H);
-  let maxM = 0;
-  for (let y=1;y<H-1;y++) for (let x=1;x<W-1;x++) {
-    const gx = -blur[(y-1)*W+(x-1)]-2*blur[y*W+(x-1)]-blur[(y+1)*W+(x-1)]
-               +blur[(y-1)*W+(x+1)]+2*blur[y*W+(x+1)]+blur[(y+1)*W+(x+1)];
-    const gy = -blur[(y-1)*W+(x-1)]-2*blur[(y-1)*W+x]-blur[(y-1)*W+(x+1)]
-               +blur[(y+1)*W+(x-1)]+2*blur[(y+1)*W+x]+blur[(y+1)*W+(x+1)];
-    gxA[y*W+x]=gx; gyA[y*W+x]=gy;
-    mag[y*W+x]=Math.sqrt(gx*gx+gy*gy);
-    if (mag[y*W+x]>maxM) maxM=mag[y*W+x];
-  }
-  if (maxM < 4) return new Uint8Array(W*H);
-
-  // Subpixel non-maximum suppression along gradient direction
-  const nms = new Float32Array(W*H);
-  for (let y=1;y<H-1;y++) for (let x=1;x<W-1;x++) {
-    const m=mag[y*W+x]; if (m<1) continue;
-    const gx=gxA[y*W+x],gy=gyA[y*W+x];
-    const len=Math.sqrt(gx*gx+gy*gy)||1;
-    const nx=gx/len, ny=gy/len;
-    if (m >= bilerp(mag,W,H,x+nx,y+ny) && m >= bilerp(mag,W,H,x-nx,y-ny))
-      nms[y*W+x]=m;
-  }
-
-  // Double threshold + hysteresis BFS
-  const hi=maxM*0.20, lo=maxM*0.06;
-  const strong=new Uint8Array(W*H), weak=new Uint8Array(W*H);
-  for (let i=0;i<W*H;i++) {
-    if (nms[i]>=hi) strong[i]=1;
-    else if (nms[i]>=lo) weak[i]=1;
-  }
-  const out=new Uint8Array(W*H);
-  const q: number[]=[];
-  for (let i=0;i<W*H;i++) if (strong[i]) { out[i]=1; q.push(i); }
-  for (let qi=0;qi<q.length;qi++) {
-    const idx=q[qi],x=idx%W,y=(idx/W)|0;
-    for (let dy=-1;dy<=1;dy++) for (let dx=-1;dx<=1;dx++) {
-      if (!dx&&!dy) continue;
-      const nx=x+dx,ny=y+dy;
-      if (nx>=0&&nx<W&&ny>=0&&ny<H) {
-        const ni=ny*W+nx;
-        if (weak[ni]&&!out[ni]){out[ni]=1;q.push(ni);}
+function boxBlur(src: Uint8Array, W: number, H: number, r: number): Uint8Array {
+  const tmp = new Float32Array(W * H);
+  const out = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      let s = 0, c = 0;
+      for (let dx = -r; dx <= r; dx++) {
+        const nx = x + dx;
+        if (nx >= 0 && nx < W) { s += src[y*W+nx]; c++; }
       }
+      tmp[y*W+x] = s / c;
+    }
+  }
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      let s = 0, c = 0;
+      for (let dy = -r; dy <= r; dy++) {
+        const ny = y + dy;
+        if (ny >= 0 && ny < H) { s += tmp[ny*W+x]; c++; }
+      }
+      out[y*W+x] = Math.round(s / c);
     }
   }
   return out;
 }
 
+function otsu(gray: Uint8Array): number {
+  const N = gray.length;
+  const hist = new Int32Array(256);
+  for (let i = 0; i < N; i++) hist[gray[i]]++;
+  let sum = 0;
+  for (let t = 0; t < 256; t++) sum += t * hist[t];
+  let sumB = 0, wB = 0, maxVar = 0, T = 128;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t]; if (!wB) continue;
+    const wF = N - wB; if (!wF) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB, mF = (sum - sumB) / wF;
+    const v = wB * wF * (mB - mF) ** 2;
+    if (v > maxVar) { maxVar = v; T = t; }
+  }
+  return T;
+}
+
 function dilate(src: Uint8Array, W: number, H: number, n: number): Uint8Array {
-  let cur=src;
-  for (let it=0;it<n;it++) {
-    const nxt=new Uint8Array(W*H);
-    for (let y=1;y<H-1;y++) for (let x=1;x<W-1;x++) {
+  let cur = src;
+  for (let it = 0; it < n; it++) {
+    const nxt = new Uint8Array(W*H);
+    for (let y = 1; y < H-1; y++) for (let x = 1; x < W-1; x++) {
       if (cur[y*W+x]||cur[(y-1)*W+x]||cur[(y+1)*W+x]||cur[y*W+x-1]||cur[y*W+x+1])
-        nxt[y*W+x]=1;
+        nxt[y*W+x] = 1;
     }
-    cur=nxt;
+    cur = nxt;
+  }
+  return cur;
+}
+
+function erode(src: Uint8Array, W: number, H: number, n: number): Uint8Array {
+  let cur = src;
+  for (let it = 0; it < n; it++) {
+    const nxt = new Uint8Array(W*H);
+    for (let y = 1; y < H-1; y++) for (let x = 1; x < W-1; x++) {
+      if (cur[y*W+x] && cur[(y-1)*W+x] && cur[(y+1)*W+x] && cur[y*W+x-1] && cur[y*W+x+1])
+        nxt[y*W+x] = 1;
+    }
+    cur = nxt;
   }
   return cur;
 }
@@ -147,39 +132,94 @@ function hullCorners(h: Point[]): [Point,Point,Point,Point] {
 }
 
 // ─── Main document detection ──────────────────────────────────────────────────
+// Strategy: heavy blur erases text/lines → document becomes uniform bright blob
+// → Otsu threshold → largest bright connected component = document
+// → convex hull of that blob → 4 diagonal extremes = corners
 
 function detectInCanvas(small: HTMLCanvasElement): [Point,Point,Point,Point]|null {
-  const W=small.width, H=small.height;
-  const {data}=small.getContext('2d')!.getImageData(0,0,W,H);
+  const W = small.width, H = small.height;
+  const {data} = small.getContext('2d')!.getImageData(0, 0, W, H);
 
   // Grayscale
-  const gray=new Uint8Array(W*H);
-  for (let i=0;i<W*H;i++) gray[i]=(data[i*4]*77+data[i*4+1]*150+data[i*4+2]*29)>>8;
+  const gray = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++)
+    gray[i] = (data[i*4]*77 + data[i*4+1]*150 + data[i*4+2]*29) >> 8;
 
-  // Canny + 3-pass dilation to connect gaps
-  const edges = dilate(cannyEdges(gray,W,H), W, H, 3);
+  // 3 passes of box blur (r=8) ≈ Gaussian σ≈14px on 320px image.
+  // This completely erases text lines and table borders — the document
+  // becomes a single solid bright blob, background stays dark.
+  let b = boxBlur(gray, W, H, 8);
+  b = boxBlur(b, W, H, 8);
+  b = boxBlur(b, W, H, 8);
 
-  // Collect edge pixel coords
-  const pts: Point[]=[];
-  for (let y=0;y<H;y++) for (let x=0;x<W;x++) if (edges[y*W+x]) pts.push({x,y});
-  if (pts.length<40) return null;
+  // Otsu finds the threshold that best separates bright (doc) from dark (bg)
+  const T = otsu(b);
+  const bin = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) bin[i] = b[i] > T ? 1 : 0;
 
-  // Convex hull of all edge pixels — the outermost edge pixels are the document boundary
-  const h = convexHull(pts);
-  if (h.length<4) return null;
+  // Morphological closing: dilate then erode fills any remaining holes
+  const closed = erode(dilate(bin, W, H, 8), W, H, 8);
 
-  const [tl,tr,br,bl] = hullCorners(h);
+  // BFS to find all connected components; pick the largest (= the document)
+  const visited = new Uint8Array(W * H);
+  const compOf  = new Int32Array(W * H);  // 0 = unassigned
+  const DX = [-1, 1, 0, 0];
+  const DY = [0, 0, -1, 1];
+  let nextLabel = 1, bestLabel = 0, bestSize = 0;
 
-  // Validate: each corner must be in its expected quadrant relative to centroid
-  const cx=(tl.x+tr.x+br.x+bl.x)/4, cy=(tl.y+tr.y+br.y+bl.y)/4;
-  if (!(tl.x<=cx&&tl.y<=cy&&tr.x>=cx&&tr.y<=cy&&br.x>=cx&&br.y>=cy&&bl.x<=cx&&bl.y>=cy))
+  for (let start = 0; start < W * H; start++) {
+    if (!closed[start] || visited[start]) continue;
+    const label = nextLabel++;
+    const q = [start];
+    visited[start] = 1; compOf[start] = label;
+    let size = 0;
+    for (let qi = 0; qi < q.length; qi++) {
+      const ci = q[qi]; size++;
+      const cx = ci % W, cy = (ci / W) | 0;
+      for (let d = 0; d < 4; d++) {
+        const nx = cx + DX[d], ny = cy + DY[d];
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const ni = ny*W+nx;
+        if (closed[ni] && !visited[ni]) { visited[ni]=1; compOf[ni]=label; q.push(ni); }
+      }
+    }
+    if (size > bestSize) { bestSize = size; bestLabel = label; }
+  }
+
+  if (bestSize < W * H * 0.05) return null;  // too small to be a document
+
+  // Collect outermost pixels per row and column of the winning blob
+  const pts: Point[] = [];
+  for (let y = 0; y < H; y++) {
+    let lo = -1, hi = -1;
+    for (let x = 0; x < W; x++)
+      if (compOf[y*W+x] === bestLabel) { if (lo < 0) lo = x; hi = x; }
+    if (lo >= 0) { pts.push({x:lo, y}); if (hi !== lo) pts.push({x:hi, y}); }
+  }
+  for (let x = 0; x < W; x++) {
+    let lo = -1, hi = -1;
+    for (let y = 0; y < H; y++)
+      if (compOf[y*W+x] === bestLabel) { if (lo < 0) lo = y; hi = y; }
+    if (lo >= 0) { pts.push({x, y:lo}); if (hi !== lo) pts.push({x, y:hi}); }
+  }
+
+  if (pts.length < 8) return null;
+
+  const hull = convexHull(pts);
+  if (hull.length < 4) return null;
+
+  const [tl, tr, br, bl] = hullCorners(hull);
+
+  // Validate: each corner in its expected quadrant
+  const mx = (tl.x+tr.x+br.x+bl.x)/4, my = (tl.y+tr.y+br.y+bl.y)/4;
+  if (!(tl.x<=mx && tl.y<=my && tr.x>=mx && tr.y<=my && br.x>=mx && br.y>=my && bl.x<=mx && bl.y>=my))
     return null;
 
-  // Validate quad area: 8%–92% of canvas
-  const area=0.5*Math.abs((tl.x-br.x)*(tr.y-bl.y)-(tr.x-bl.x)*(tl.y-br.y));
-  if (area<W*H*0.08||area>W*H*0.92) return null;
+  // Validate area: 6%–92% of canvas
+  const area = 0.5 * Math.abs((tl.x-br.x)*(tr.y-bl.y) - (tr.x-bl.x)*(tl.y-br.y));
+  if (area < W*H*0.06 || area > W*H*0.92) return null;
 
-  return [tl,tr,br,bl];
+  return [tl, tr, br, bl];
 }
 
 function mkSmall(
