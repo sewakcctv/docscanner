@@ -157,8 +157,9 @@ function detectInCanvas(small: HTMLCanvasElement): [Point,Point,Point,Point]|nul
   const bin = new Uint8Array(W * H);
   for (let i = 0; i < W * H; i++) bin[i] = b[i] > T ? 1 : 0;
 
-  // Morphological closing: dilate then erode fills any remaining holes
-  const closed = erode(dilate(bin, W, H, 8), W, H, 8);
+  // Tiny dilation only (2px) to bridge hairline gaps — NO erosion back.
+  // Heavy closing (dilate+erode) was rounding corners by ~30px in original resolution.
+  const closed = dilate(bin, W, H, 2);
 
   // BFS to find all connected components; pick the largest (= the document)
   const visited = new Uint8Array(W * H);
@@ -242,7 +243,7 @@ function detectLive(video: HTMLVideoElement): [Point,Point,Point,Point]|null {
   const W=video.videoWidth, H=video.videoHeight;
   if (!W||!H) return null;
   try {
-    const {c,scale}=mkSmall(video,W,H,320);
+    const {c,scale}=mkSmall(video,W,H,480);
     const r=detectInCanvas(c);
     if (!r) return null;
     const inv=1/scale;
@@ -253,7 +254,7 @@ function detectLive(video: HTMLVideoElement): [Point,Point,Point,Point]|null {
 function detectStatic(cap: HTMLCanvasElement): [Point,Point,Point,Point] {
   const W=cap.width, H=cap.height;
   try {
-    const {c,scale}=mkSmall(cap,W,H,600);
+    const {c,scale}=mkSmall(cap,W,H,800);
     const r=detectInCanvas(c);
     if (!r) return defaultCorners(W,H);
     const inv=1/scale;
