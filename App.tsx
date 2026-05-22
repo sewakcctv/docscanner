@@ -313,41 +313,131 @@ function warpAndEnhance(src: HTMLCanvasElement, corners: [Point,Point,Point,Poin
   return out.toDataURL('image/jpeg',0.95);
 }
 
-// ─── Zoom Mirror (2× zoom, no crosshair overload) ────────────────────────────
+// ─── Rotate helpers ───────────────────────────────────────────────────────────
 
-const MSIZ = 140;
+function rotateCanvas90cw(src: HTMLCanvasElement): HTMLCanvasElement {
+  const out = document.createElement('canvas');
+  out.width = src.height; out.height = src.width;
+  const ctx = out.getContext('2d')!;
+  ctx.translate(out.width, 0);
+  ctx.rotate(Math.PI / 2);
+  ctx.drawImage(src, 0, 0);
+  return out;
+}
 
-const ZoomMirror: React.FC<{srcCanvas:HTMLCanvasElement;pos:Point;idx:number}> = ({srcCanvas,pos,idx}) => {
-  const ref=useRef<HTMLCanvasElement>(null);
+async function rotateDataUrl90cw(dataUrl: string): Promise<string> {
+  const img = new Image();
+  await new Promise<void>(r => { img.onload = () => r(); img.src = dataUrl; });
+  const out = document.createElement('canvas');
+  out.width = img.naturalHeight; out.height = img.naturalWidth;
+  const ctx = out.getContext('2d')!;
+  ctx.translate(out.width, 0);
+  ctx.rotate(Math.PI / 2);
+  ctx.drawImage(img, 0, 0);
+  return out.toDataURL('image/jpeg', 0.95);
+}
+
+// ─── Icons ────────────────────────────────────────────────────────────────────
+
+const IcoRotate = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 2v6h-6"/><path d="M21 13a9 9 0 1 1-3-7.7L21 8"/>
+  </svg>
+);
+const IcoCheck = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="20 6 9 17 4 12"/>
+  </svg>
+);
+const IcoX = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+  </svg>
+);
+const IcoDownload = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+    <polyline points="7 10 12 15 17 10"/>
+    <line x1="12" y1="15" x2="12" y2="3"/>
+  </svg>
+);
+const IcoArrowLeft = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <path d="M19 12H5M12 5l-7 7 7 7"/>
+  </svg>
+);
+const IcoSpin = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{animation:'spin .8s linear infinite'}}>
+    <path d="M12 2a10 10 0 0 1 10 10"/>
+  </svg>
+);
+
+// ─── Small reusable UI pieces ─────────────────────────────────────────────────
+
+const IconBtn: React.FC<{onClick:()=>void; label:string; icon:React.ReactNode; disabled?:boolean}> = ({onClick,label,icon,disabled}) => (
+  <button onClick={onClick} disabled={disabled} aria-label={label} style={{
+    width:56, display:'flex', flexDirection:'column', alignItems:'center', gap:4,
+    background:'none', border:'none', cursor: disabled?'default':'pointer',
+    padding:0, opacity: disabled ? 0.35 : 1,
+  }}>
+    <div style={{
+      width:44, height:44, borderRadius:14,
+      background:'rgba(255,255,255,0.07)',
+      border:'1px solid rgba(255,255,255,0.1)',
+      display:'flex', alignItems:'center', justifyContent:'center',
+      color:'#cbd5e1',
+    }}>{icon}</div>
+    <span style={{fontSize:10, color:'#4a5568', fontWeight:500, letterSpacing:'0.02em'}}>{label}</span>
+  </button>
+);
+
+const PrimaryBtn: React.FC<{onClick:()=>void; label:string; icon?:React.ReactNode; disabled?:boolean}> = ({onClick,label,icon,disabled}) => (
+  <button onClick={onClick} disabled={disabled} style={{
+    flex:1, height:50, borderRadius:25,
+    background: disabled ? '#7c4f0a' : 'linear-gradient(135deg,#f59e0b,#d97706)',
+    color:'#fff', border:'none', cursor: disabled?'default':'pointer',
+    display:'flex', alignItems:'center', justifyContent:'center', gap:8,
+    fontSize:15, fontWeight:600, letterSpacing:'0.01em',
+    boxShadow: disabled ? 'none' : '0 4px 14px rgba(217,119,6,0.4)',
+  }}>
+    {icon}{label}
+  </button>
+);
+
+// ─── Zoom Mirror ──────────────────────────────────────────────────────────────
+
+const MSIZ = 130;
+
+const ZoomMirror: React.FC<{srcCanvas:HTMLCanvasElement; pos:Point; idx:number}> = ({srcCanvas,pos,idx}) => {
+  const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
-    const c=ref.current; if (!c) return;
-    const ctx=c.getContext('2d')!;
-    const ZOOM=2.2;
-    const srcSz=MSIZ/ZOOM;
-    const sx=Math.max(0,Math.min(srcCanvas.width-srcSz,pos.x-srcSz/2));
-    const sy=Math.max(0,Math.min(srcCanvas.height-srcSz,pos.y-srcSz/2));
-    ctx.clearRect(0,0,MSIZ,MSIZ);
-    ctx.drawImage(srcCanvas,sx,sy,srcSz,srcSz,0,0,MSIZ,MSIZ);
-    // Thin crosshair
-    const cx=Math.round((pos.x-sx)*ZOOM), cy=Math.round((pos.y-sy)*ZOOM);
-    ctx.strokeStyle='rgba(251,191,36,0.9)'; ctx.lineWidth=1.5;
+    const c = ref.current; if (!c) return;
+    const ctx = c.getContext('2d')!;
+    const ZOOM = 2.2, srcSz = MSIZ / ZOOM;
+    const sx = Math.max(0, Math.min(srcCanvas.width  - srcSz, pos.x - srcSz/2));
+    const sy = Math.max(0, Math.min(srcCanvas.height - srcSz, pos.y - srcSz/2));
+    ctx.clearRect(0, 0, MSIZ, MSIZ);
+    ctx.drawImage(srcCanvas, sx, sy, srcSz, srcSz, 0, 0, MSIZ, MSIZ);
+    const cx = Math.round((pos.x - sx) * ZOOM), cy = Math.round((pos.y - sy) * ZOOM);
+    ctx.strokeStyle = 'rgba(251,191,36,0.85)'; ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(cx,0);ctx.lineTo(cx,MSIZ);
-    ctx.moveTo(0,cy);ctx.lineTo(MSIZ,cy);
+    ctx.moveTo(cx,0); ctx.lineTo(cx,MSIZ);
+    ctx.moveTo(0,cy); ctx.lineTo(MSIZ,cy);
     ctx.stroke();
-    ctx.fillStyle='#fbbf24';
-    ctx.beginPath();ctx.arc(cx,cy,2.5,0,Math.PI*2);ctx.fill();
-  },[srcCanvas,pos]);
+    ctx.fillStyle = '#fbbf24';
+    ctx.beginPath(); ctx.arc(cx, cy, 2.5, 0, Math.PI*2); ctx.fill();
+  }, [srcCanvas, pos]);
 
-  // Position in the corner opposite the dragged corner
-  const off: React.CSSProperties[] = [
-    {bottom:12,right:12},{bottom:12,left:12},{top:12,left:12},{top:12,right:12}
+  const pos4: React.CSSProperties[] = [
+    {bottom:12, right:12}, {bottom:12, left:12}, {top:12, left:12}, {top:12, right:12},
   ];
   return (
     <canvas ref={ref} width={MSIZ} height={MSIZ} style={{
-      position:'absolute',...off[idx],width:MSIZ,height:MSIZ,
-      borderRadius:10,border:'2px solid rgba(255,255,255,0.88)',
-      boxShadow:'0 4px 16px rgba(0,0,0,0.65)',pointerEvents:'none',zIndex:30,
+      position:'absolute', ...pos4[idx], width:MSIZ, height:MSIZ,
+      borderRadius:12,
+      border:'1.5px solid rgba(255,255,255,0.2)',
+      boxShadow:'0 8px 24px rgba(0,0,0,0.7)',
+      pointerEvents:'none', zIndex:30,
       imageRendering:'pixelated',
     }}/>
   );
@@ -356,74 +446,72 @@ const ZoomMirror: React.FC<{srcCanvas:HTMLCanvasElement;pos:Point;idx:number}> =
 // ─── Crop Editor ──────────────────────────────────────────────────────────────
 
 const CropEditor: React.FC<{
-  imageUrl:string;imgW:number;imgH:number;
+  imageUrl:string; imgW:number; imgH:number;
   corners:[Point,Point,Point,Point];
   onChange:(c:[Point,Point,Point,Point])=>void;
   srcCanvas:HTMLCanvasElement;
-}> = ({imageUrl,imgW,imgH,corners,onChange,srcCanvas}) => {
-  const svgRef=useRef<SVGSVGElement>(null);
-  const drag=useRef<number|null>(null);
-  const dragOff=useRef<Point>({x:0,y:0});
-  const [zoom,setZoom]=useState<{idx:number;pos:Point}|null>(null);
+}> = ({imageUrl, imgW, imgH, corners, onChange, srcCanvas}) => {
+  const svgRef    = useRef<SVGSVGElement>(null);
+  const drag      = useRef<number|null>(null);
+  const dragOff   = useRef<Point>({x:0, y:0});
+  const [zoom, setZoom] = useState<{idx:number; pos:Point}|null>(null);
 
-  const toSvgPt=(e:React.PointerEvent): Point => {
-    const svg=svgRef.current!;
-    const pt=svg.createSVGPoint(); pt.x=e.clientX; pt.y=e.clientY;
-    const tp=pt.matrixTransform(svg.getScreenCTM()!.inverse());
-    return {x:tp.x, y:tp.y};
+  const toSvgPt = (e: React.PointerEvent): Point => {
+    const svg = svgRef.current!;
+    const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+    return pt.matrixTransform(svg.getScreenCTM()!.inverse());
   };
 
-  const onDown=(e:React.PointerEvent,i:number)=>{
-    e.preventDefault();(e.target as Element).setPointerCapture(e.pointerId);
-    drag.current=i;
-    // Record offset between touch point and handle centre so the handle
-    // doesn't jump to the finger on the first move event.
-    const pt=toSvgPt(e);
-    dragOff.current={x:pt.x-corners[i].x, y:pt.y-corners[i].y};
-    setZoom({idx:i,pos:corners[i]});
+  const onDown = (e: React.PointerEvent, i: number) => {
+    e.preventDefault();
+    (e.target as Element).setPointerCapture(e.pointerId);
+    drag.current = i;
+    const pt = toSvgPt(e);
+    // Capture offset so the handle doesn't jump to finger tip on first move
+    dragOff.current = {x: pt.x - corners[i].x, y: pt.y - corners[i].y};
+    setZoom({idx:i, pos:corners[i]});
   };
-  const onMove=(e:React.PointerEvent)=>{
-    if (drag.current===null) return; e.preventDefault();
-    const raw=toSvgPt(e);
-    const pt={
-      x:Math.max(0,Math.min(imgW, raw.x-dragOff.current.x)),
-      y:Math.max(0,Math.min(imgH, raw.y-dragOff.current.y)),
+  const onMove = (e: React.PointerEvent) => {
+    if (drag.current === null) return;
+    e.preventDefault();
+    const raw = toSvgPt(e);
+    const pt = {
+      x: Math.max(0, Math.min(imgW, raw.x - dragOff.current.x)),
+      y: Math.max(0, Math.min(imgH, raw.y - dragOff.current.y)),
     };
-    const n=[...corners] as [Point,Point,Point,Point];
-    n[drag.current]=pt; onChange(n); setZoom({idx:drag.current,pos:pt});
+    const n = [...corners] as [Point,Point,Point,Point];
+    n[drag.current] = pt; onChange(n); setZoom({idx:drag.current, pos:pt});
   };
-  const onUp=()=>{drag.current=null;setZoom(null);};
+  const onUp = () => { drag.current = null; setZoom(null); };
 
-  const [tl,tr,br,bl]=corners;
-  const pts=`${tl.x},${tl.y} ${tr.x},${tr.y} ${br.x},${br.y} ${bl.x},${bl.y}`;
-  const R=Math.max(imgW,imgH)*0.018;   // visual radius — noticeably smaller
-  const SW=Math.max(imgW,imgH)*0.005;
+  const [tl,tr,br,bl] = corners;
+  const pts = `${tl.x},${tl.y} ${tr.x},${tr.y} ${br.x},${br.y} ${bl.x},${bl.y}`;
+  const R  = Math.max(imgW, imgH) * 0.018;
+  const SW = Math.max(imgW, imgH) * 0.004;
 
   return (
-    <div style={{position:'relative',width:'100%',height:'100%'}}>
-      <img src={imageUrl} alt="Document" draggable={false}
-        style={{width:'100%',height:'100%',objectFit:'contain',display:'block',userSelect:'none'}}/>
+    <div style={{position:'relative', width:'100%', height:'100%'}}>
+      <img src={imageUrl} alt="" draggable={false}
+        style={{width:'100%', height:'100%', objectFit:'contain', display:'block', userSelect:'none'}}/>
       <svg ref={svgRef} viewBox={`0 0 ${imgW} ${imgH}`} preserveAspectRatio="xMidYMid meet"
-        style={{position:'absolute',inset:0,width:'100%',height:'100%',touchAction:'none'}}
+        style={{position:'absolute', inset:0, width:'100%', height:'100%', touchAction:'none'}}
         onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
-        {/* Dim outside selection */}
-        <mask id="dm">
+        <mask id="crop-mask">
           <rect width={imgW} height={imgH} fill="white"/>
           <polygon points={pts} fill="black"/>
         </mask>
-        <rect width={imgW} height={imgH} fill="rgba(0,0,0,0.5)" mask="url(#dm)"/>
-        {/* Yellow outline */}
-        <polygon points={pts} fill="rgba(251,191,36,0.08)"
+        <rect width={imgW} height={imgH} fill="rgba(0,0,0,0.55)" mask="url(#crop-mask)"/>
+        <polygon points={pts} fill="rgba(251,191,36,0.07)"
           stroke="#fbbf24" strokeWidth={SW} strokeLinejoin="round"/>
-        {/* Corner handles — large transparent touch area, small visual dot */}
-        {corners.map((c,i)=>(
-          <g key={i} onPointerDown={e=>onDown(e,i)} style={{cursor:'grab'}}>
+        {/* Corner handles: large invisible tap zone + small visible dot */}
+        {corners.map((c, i) => (
+          <g key={i} onPointerDown={e => onDown(e, i)} style={{cursor:'grab'}}>
             <circle cx={c.x} cy={c.y} r={R*3} fill="transparent"/>
-            <circle cx={c.x} cy={c.y} r={R} fill="#fbbf24" stroke="white" strokeWidth={SW*0.8}/>
+            <circle cx={c.x} cy={c.y} r={R} fill="#fbbf24" stroke="rgba(255,255,255,0.9)" strokeWidth={SW}/>
           </g>
         ))}
       </svg>
-      {zoom&&<ZoomMirror srcCanvas={srcCanvas} pos={zoom.pos} idx={zoom.idx}/>}
+      {zoom && <ZoomMirror srcCanvas={srcCanvas} pos={zoom.pos} idx={zoom.idx}/>}
     </div>
   );
 };
@@ -436,278 +524,307 @@ const App: React.FC = () => {
   const streamRef      = useRef<MediaStream|null>(null);
   const prevRef        = useRef<[Point,Point,Point,Point]|null>(null);
 
-  const [mode,           setMode]          = useState<Mode>('camera');
-  const [vDims,          setVDims]         = useState({w:1920,h:1080});
-  const [liveCorners,    setLiveCorners]   = useState<[Point,Point,Point,Point]|null>(null);
-  const [capturedImage,  setCapturedImage] = useState<string|null>(null);
-  const [imgSize,        setImgSize]       = useState({w:0,h:0});
-  const [corners,        setCorners]       = useState<[Point,Point,Point,Point]|null>(null);
-  const [processedImage, setProcessed]     = useState<string|null>(null);
-  const [processing,     setProcessing]    = useState(false);
-  const [error,          setError]         = useState<string|null>(null);
-  const [savedMsg,       setSavedMsg]      = useState('');
+  const [mode,          setMode]         = useState<Mode>('camera');
+  const [vDims,         setVDims]        = useState({w:1920, h:1080});
+  const [liveCorners,   setLiveCorners]  = useState<[Point,Point,Point,Point]|null>(null);
+  const [capturedImage, setCapturedImage]= useState<string|null>(null);
+  const [imgSize,       setImgSize]      = useState({w:0, h:0});
+  const [corners,       setCorners]      = useState<[Point,Point,Point,Point]|null>(null);
+  const [processedImage,setProcessed]    = useState<string|null>(null);
+  const [processing,    setProcessing]   = useState(false);
+  const [error,         setError]        = useState<string|null>(null);
+  const [toast,         setToast]        = useState('');
+
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 2000); };
 
   const stopCamera = useCallback(() => {
-    streamRef.current?.getTracks().forEach(t=>t.stop());
-    streamRef.current=null;
-  },[]);
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+  }, []);
 
   const startCamera = useCallback(async () => {
     setError(null);
     try {
-      const stream=await navigator.mediaDevices.getUserMedia({
-        video:{facingMode:{ideal:'environment'},width:{ideal:3840},height:{ideal:2160}},audio:false
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {facingMode:{ideal:'environment'}, width:{ideal:3840}, height:{ideal:2160}},
+        audio: false,
       });
-      streamRef.current=stream;
-      if (videoRef.current) videoRef.current.srcObject=stream;
+      streamRef.current = stream;
+      if (videoRef.current) videoRef.current.srcObject = stream;
     } catch {
-      setError('Camera access denied.\nAllow camera permission in your browser settings, then refresh.');
+      setError('Camera access denied. Allow camera permission in your browser settings, then refresh.');
     }
-  },[]);
+  }, []);
 
-  useEffect(()=>{startCamera();return stopCamera;},[startCamera,stopCamera]);
+  useEffect(() => { startCamera(); return stopCamera; }, [startCamera, stopCamera]);
 
-  // Live detection every 300 ms — no auto-capture, just visual feedback
-  useEffect(()=>{
-    if (mode!=='camera'){setLiveCorners(null);prevRef.current=null;return;}
-    const id=setInterval(()=>{
-      const v=videoRef.current;
-      if (!v||v.readyState<2) return;
-      // Smooth the detected corners with the previous frame (reduce jitter)
-      const found=detectLive(v);
+  // Live detection every 300 ms
+  useEffect(() => {
+    if (mode !== 'camera') { setLiveCorners(null); prevRef.current = null; return; }
+    const id = setInterval(() => {
+      const v = videoRef.current;
+      if (!v || v.readyState < 2) return;
+      const found = detectLive(v);
       if (found) {
-        const prev=prevRef.current;
-        if (prev) {
-          const smoothed=found.map((c,i)=>({
-            x:c.x*0.4+prev[i].x*0.6,
-            y:c.y*0.4+prev[i].y*0.6,
-          })) as [Point,Point,Point,Point];
-          prevRef.current=smoothed;
-          setLiveCorners(smoothed);
-        } else {
-          prevRef.current=found;
-          setLiveCorners(found);
-        }
+        const prev = prevRef.current;
+        const smoothed = prev
+          ? found.map((c,i) => ({x:c.x*.4+prev[i].x*.6, y:c.y*.4+prev[i].y*.6})) as [Point,Point,Point,Point]
+          : found;
+        prevRef.current = smoothed;
+        setLiveCorners(smoothed);
       } else {
-        prevRef.current=null;
+        prevRef.current = null;
         setLiveCorners(null);
       }
-    },300);
-    return ()=>clearInterval(id);
-  },[mode]);
+    }, 300);
+    return () => clearInterval(id);
+  }, [mode]);
 
-  const capture=useCallback(()=>{
-    const v=videoRef.current;
-    if (!v||v.readyState<2) return;
-    const W=v.videoWidth, H=v.videoHeight;
-    const cap=document.createElement('canvas'); cap.width=W; cap.height=H;
-    cap.getContext('2d')!.drawImage(v,0,0);
-    capturedCanvas.current=cap;
-    // Re-detect on the full captured frame (higher resolution = more accurate)
-    const det=detectStatic(cap);
-    setCorners(det);
-    setImgSize({w:W,h:H});
-    setCapturedImage(cap.toDataURL('image/jpeg',0.92));
+  const capture = useCallback(() => {
+    const v = videoRef.current;
+    if (!v || v.readyState < 2) return;
+    const W = v.videoWidth, H = v.videoHeight;
+    const cap = document.createElement('canvas'); cap.width = W; cap.height = H;
+    cap.getContext('2d')!.drawImage(v, 0, 0);
+    capturedCanvas.current = cap;
+    setCorners(detectStatic(cap));
+    setImgSize({w:W, h:H});
+    setCapturedImage(cap.toDataURL('image/jpeg', 0.92));
     setMode('crop');
     stopCamera();
-  },[stopCamera]);
+  }, [stopCamera]);
 
-  const retake=useCallback(()=>{
-    setCapturedImage(null);setProcessed(null);setSavedMsg('');
-    capturedCanvas.current=null;
-    setMode('camera');startCamera();
-  },[startCamera]);
+  const rotateCrop = useCallback(() => {
+    if (!capturedCanvas.current) return;
+    const r = rotateCanvas90cw(capturedCanvas.current);
+    capturedCanvas.current = r;
+    setImgSize({w:r.width, h:r.height});
+    setCorners(defaultCorners(r.width, r.height));
+    setCapturedImage(r.toDataURL('image/jpeg', 0.92));
+  }, []);
 
-  const applyCrop=useCallback(async()=>{
-    if (!capturedCanvas.current||!corners) return;
-    setProcessing(true);
-    await new Promise(r=>setTimeout(r,30));
-    try{setProcessed(warpAndEnhance(capturedCanvas.current,corners));setMode('preview');}
-    finally{setProcessing(false);}
-  },[corners]);
-
-  const download=useCallback(()=>{
+  const rotatePreview = useCallback(async () => {
     if (!processedImage) return;
-    const ts=new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
-    const a=document.createElement('a');
-    a.href=processedImage; a.download=`scan_${ts}.jpg`;
-    document.body.appendChild(a);a.click();document.body.removeChild(a);
-    setSavedMsg('Saved!');setTimeout(()=>setSavedMsg(''),2000);
-  },[processedImage]);
+    setProcessing(true);
+    try { setProcessed(await rotateDataUrl90cw(processedImage)); }
+    finally { setProcessing(false); }
+  }, [processedImage]);
 
-  const detected=liveCorners!==null;
+  const retake = useCallback(() => {
+    setCapturedImage(null); setProcessed(null); setToast('');
+    capturedCanvas.current = null;
+    setMode('camera'); startCamera();
+  }, [startCamera]);
+
+  const applyCrop = useCallback(async () => {
+    if (!capturedCanvas.current || !corners) return;
+    setProcessing(true);
+    await new Promise(r => setTimeout(r, 30));
+    try { setProcessed(warpAndEnhance(capturedCanvas.current, corners)); setMode('preview'); }
+    finally { setProcessing(false); }
+  }, [corners]);
+
+  const download = useCallback(() => {
+    if (!processedImage) return;
+    const ts = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+    const a = document.createElement('a'); a.href = processedImage; a.download = `scan_${ts}.jpg`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    showToast('Saved!');
+  }, [processedImage]);
+
+  const detected = liveCorners !== null;
 
   return (
     <div style={{
-      height:'100dvh',display:'flex',flexDirection:'column',
-      background:'#0f172a',color:'#f1f5f9',
-      fontFamily:'system-ui,-apple-system,sans-serif',
-      userSelect:'none',overflow:'hidden',
+      height:'100dvh', display:'flex', flexDirection:'column', overflow:'hidden',
+      background:'#0b0f1a', color:'#f1f5f9',
+      fontFamily:'-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,sans-serif',
+      userSelect:'none',
     }}>
-      {/* Header */}
+
+      {/* ── Header ── */}
       <div style={{
-        padding:'10px 16px',fontSize:'15px',fontWeight:700,
-        letterSpacing:'0.08em',textAlign:'center',color:'#475569',
-        flexShrink:0,position:'relative',display:'flex',alignItems:'center',justifyContent:'center',
+        height:52, flexShrink:0, position:'relative',
+        display:'flex', alignItems:'center', justifyContent:'center',
+        borderBottom:'1px solid rgba(255,255,255,0.06)',
       }}>
-        {mode!=='camera'&&(
-          <button onClick={retake} style={{
-            position:'absolute',left:12,background:'none',border:'none',
-            color:'#64748b',fontSize:'13px',cursor:'pointer',padding:'4px 8px',
-          }}>✕ Retake</button>
+        {mode !== 'camera' && (
+          <button onClick={retake} aria-label="Back" style={{
+            position:'absolute', left:10,
+            width:36, height:36, borderRadius:10,
+            background:'rgba(255,255,255,0.06)', border:'none',
+            display:'flex', alignItems:'center', justifyContent:'center',
+            cursor:'pointer', color:'#94a3b8',
+          }}>
+            <IcoArrowLeft/>
+          </button>
         )}
-        DOC SCANNER
-        {mode==='crop'&&(
-          <span style={{position:'absolute',right:12,fontSize:'11px',color:'#475569',fontWeight:400}}>
+        <div style={{display:'flex', alignItems:'center', gap:8}}>
+          {/* Scanner icon */}
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" strokeWidth="2" strokeLinecap="round">
+            <path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+            <path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+            <rect x="7" y="7" width="10" height="10" rx="1"/>
+          </svg>
+          <span style={{fontSize:12, fontWeight:700, letterSpacing:'0.12em', color:'#6b7a94', textTransform:'uppercase' as const}}>
+            Doc Scanner
+          </span>
+        </div>
+        {mode === 'crop' && (
+          <span style={{position:'absolute', right:14, fontSize:11, color:'#374151', fontWeight:500}}>
             drag corners
           </span>
         )}
       </div>
 
-      {/* Viewport */}
+      {/* ── Main viewport ── */}
       <div style={{
-        flex:1,position:'relative',overflow:'hidden',
-        display:'flex',alignItems:'center',justifyContent:'center',background:'#000',
+        flex:1, position:'relative', overflow:'hidden',
+        display:'flex', alignItems:'center', justifyContent:'center',
+        background:'#000',
       }}>
-        {error?(
-          <div style={{padding:'32px',textAlign:'center',color:'#f87171',fontSize:'15px',lineHeight:1.65}}>
+        {error ? (
+          <div style={{
+            padding:'32px 28px', textAlign:'center', color:'#f87171',
+            fontSize:14, lineHeight:1.7, maxWidth:280,
+          }}>
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"
+              style={{marginBottom:16, opacity:.7, display:'block', margin:'0 auto 16px'}}>
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+              <circle cx="12" cy="13" r="4"/>
+            </svg>
             {error}
           </div>
-        ):mode==='camera'?(
+        ) : mode === 'camera' ? (
           <>
             <video ref={videoRef}
-              style={{width:'100%',height:'100%',objectFit:'contain'}}
+              style={{width:'100%', height:'100%', objectFit:'contain'}}
               autoPlay playsInline muted
-              onLoadedMetadata={()=>{
-                const v=videoRef.current;
-                if (v) setVDims({w:v.videoWidth,h:v.videoHeight});
+              onLoadedMetadata={() => {
+                const v = videoRef.current;
+                if (v) setVDims({w:v.videoWidth, h:v.videoHeight});
               }}
             />
-            {/* Live overlay — SVG viewBox matches actual video resolution */}
-            <svg
-              viewBox={`0 0 ${vDims.w} ${vDims.h}`}
-              preserveAspectRatio="xMidYMid meet"
-              style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}}
-            >
-              {liveCorners?(
-                // Detected: yellow quad with animated opacity
+            {/* Detection overlay */}
+            <svg viewBox={`0 0 ${vDims.w} ${vDims.h}`} preserveAspectRatio="xMidYMid meet"
+              style={{position:'absolute', inset:0, width:'100%', height:'100%', pointerEvents:'none'}}>
+              {liveCorners ? (
                 <polygon
                   points={liveCorners.map(c=>`${c.x},${c.y}`).join(' ')}
-                  fill="rgba(251,191,36,0.13)"
+                  fill="rgba(251,191,36,0.08)"
                   stroke="#fbbf24"
-                  strokeWidth={Math.max(vDims.w,vDims.h)*0.004}
+                  strokeWidth={Math.max(vDims.w,vDims.h)*0.003}
                   strokeLinejoin="round"
-                  style={{animation:'fadeIn 0.2s ease'}}
                 />
-              ):(
-                // Idle: subtle corner brackets
-                (()=>{
-                  const bx=vDims.w*0.08,by=vDims.h*0.10;
-                  const bw=vDims.w*0.84,bh=vDims.h*0.80;
-                  const arm=Math.min(vDims.w,vDims.h)*0.055;
-                  const sw=Math.max(vDims.w,vDims.h)*0.004;
-                  return ([
-                    [bx,by,1,1],[bx+bw,by,-1,1],[bx+bw,by+bh,-1,-1],[bx,by+bh,1,-1]
-                  ] as [number,number,number,number][]).map(([x,y,dx,dy],i)=>(
-                    <g key={i}>
-                      <line x1={x} y1={y} x2={x+dx*arm} y2={y} stroke="rgba(255,255,255,0.3)" strokeWidth={sw} strokeLinecap="round"/>
-                      <line x1={x} y1={y} x2={x} y2={y+dy*arm} stroke="rgba(255,255,255,0.3)" strokeWidth={sw} strokeLinecap="round"/>
-                    </g>
-                  ));
-                })()
-              )}
+              ) : (() => {
+                const bx=vDims.w*.08, by=vDims.h*.1;
+                const bw=vDims.w*.84, bh=vDims.h*.8;
+                const arm=Math.min(vDims.w,vDims.h)*.05;
+                const sw=Math.max(vDims.w,vDims.h)*.004;
+                return ([
+                  [bx,by,1,1],[bx+bw,by,-1,1],[bx+bw,by+bh,-1,-1],[bx,by+bh,1,-1]
+                ] as [number,number,number,number][]).map(([x,y,dx,dy],i) => (
+                  <g key={i}>
+                    <line x1={x} y1={y} x2={x+dx*arm} y2={y} stroke="rgba(255,255,255,0.2)" strokeWidth={sw} strokeLinecap="round"/>
+                    <line x1={x} y1={y} x2={x} y2={y+dy*arm} stroke="rgba(255,255,255,0.2)" strokeWidth={sw} strokeLinecap="round"/>
+                  </g>
+                ));
+              })()}
             </svg>
           </>
-        ):mode==='crop'&&capturedImage&&corners&&imgSize.w>0?(
+        ) : mode === 'crop' && capturedImage && corners && imgSize.w > 0 ? (
           <>
             <CropEditor
               imageUrl={capturedImage} imgW={imgSize.w} imgH={imgSize.h}
-              corners={corners} onChange={c=>setCorners(c)}
+              corners={corners} onChange={c => setCorners(c)}
               srcCanvas={capturedCanvas.current!}
             />
-            {processing&&(
-              <div style={{
-                position:'absolute',inset:0,background:'rgba(0,0,0,0.72)',
-                display:'flex',alignItems:'center',justifyContent:'center',
-                color:'#fff',fontSize:'16px',gap:10,
-              }}>
-                <svg width="22" height="22" viewBox="0 0 22 22" style={{animation:'spin 0.9s linear infinite'}}>
-                  <circle cx="11" cy="11" r="9" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="2.5"/>
-                  <path d="M11 2 A9 9 0 0 1 20 11" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
-                </svg>
-                Processing…
-              </div>
-            )}
+            {processing && <LoadingOverlay label="Processing…"/>}
           </>
-        ):mode==='preview'&&processedImage?(
+        ) : mode === 'preview' && processedImage ? (
           <>
-            <img src={processedImage} alt="Scan"
-              style={{width:'100%',height:'100%',objectFit:'contain'}}/>
-            {savedMsg&&(
-              <div style={{
-                position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)',
-                background:'rgba(0,0,0,0.78)',color:'#fff',
-                padding:'12px 28px',borderRadius:12,fontSize:15,pointerEvents:'none',
-              }}>{savedMsg}</div>
-            )}
+            <img src={processedImage} alt="Scanned document"
+              style={{width:'100%', height:'100%', objectFit:'contain'}}/>
+            {processing && <LoadingOverlay label="Rotating…"/>}
           </>
-        ):null}
-      </div>
+        ) : null}
 
-      {/* Controls — paddingBottom includes Android/iOS nav-bar safe area */}
-      <div style={{
-        padding:'18px 24px 0',paddingBottom:'max(28px, env(safe-area-inset-bottom, 20px))',
-        display:'flex',alignItems:'center',
-        justifyContent:'center',gap:16,flexShrink:0,background:'#0f172a',
-      }}>
-        {mode==='camera'?(
-          // Capture button — yellow ring when document detected
-          <button onClick={capture} aria-label="Capture"
-            style={{
-              width:72,height:72,borderRadius:'50%',
-              border:`4px solid ${detected?'#fbbf24':'rgba(255,255,255,0.45)'}`,
-              background:'transparent',cursor:'pointer',
-              display:'flex',alignItems:'center',justifyContent:'center',
-              transition:'border-color 0.25s',
-              boxShadow:detected?'0 0 0 3px rgba(251,191,36,0.25)':'none',
-            }}>
-            <div style={{
-              width:54,height:54,borderRadius:'50%',
-              background:detected?'#fbbf24':'rgba(255,255,255,0.8)',
-              transition:'background 0.25s',
-            }}/>
-          </button>
-        ):mode==='crop'?(
-          <>
-            <button onClick={retake}    style={btn('dark')}>Retake</button>
-            <button onClick={applyCrop} style={btn('gold')} disabled={processing}>
-              {processing?'Processing…':'Crop & Apply'}
-            </button>
-          </>
-        ):(
-          <>
-            <button onClick={retake}   style={btn('dark')}>Retake</button>
-            <button onClick={download} style={btn('gold')}>↓ Download</button>
-          </>
+        {/* Toast */}
+        {toast && (
+          <div style={{
+            position:'absolute', bottom:20, left:'50%', transform:'translateX(-50%)',
+            background:'rgba(15,23,42,0.92)', backdropFilter:'blur(12px)',
+            color:'#f1f5f9', padding:'10px 22px', borderRadius:20,
+            fontSize:13, fontWeight:500, pointerEvents:'none',
+            border:'1px solid rgba(255,255,255,0.1)',
+            boxShadow:'0 8px 24px rgba(0,0,0,0.5)',
+          }}>{toast}</div>
         )}
       </div>
 
-      <style>{`
-        @keyframes spin   { to { transform: rotate(360deg); } }
-        @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
-      `}</style>
+      {/* ── Controls bar ── */}
+      <div style={{
+        flexShrink:0, background:'#0b0f1a',
+        borderTop:'1px solid rgba(255,255,255,0.06)',
+        padding:'14px 20px',
+        paddingBottom:'max(18px, env(safe-area-inset-bottom, 14px))',
+      }}>
+        {mode === 'camera' ? (
+          /* Shutter button */
+          <div style={{display:'flex', justifyContent:'center', alignItems:'center', paddingBottom:4}}>
+            <button onClick={capture} aria-label="Capture" style={{
+              width:72, height:72, borderRadius:'50%', cursor:'pointer',
+              border:`3px solid ${detected ? '#fbbf24' : 'rgba(255,255,255,0.25)'}`,
+              background:'transparent',
+              display:'flex', alignItems:'center', justifyContent:'center',
+              boxShadow: detected
+                ? '0 0 0 5px rgba(251,191,36,0.18), 0 0 24px rgba(251,191,36,0.2)'
+                : 'none',
+              transition:'border-color .25s, box-shadow .25s',
+            }}>
+              <div style={{
+                width:54, height:54, borderRadius:'50%',
+                background: detected ? '#fbbf24' : 'rgba(255,255,255,0.88)',
+                transition:'background .25s',
+              }}/>
+            </button>
+          </div>
+        ) : mode === 'crop' ? (
+          <div style={{display:'flex', alignItems:'flex-start', gap:10}}>
+            <IconBtn onClick={rotateCrop} label="Rotate" icon={<IcoRotate/>}/>
+            <PrimaryBtn onClick={applyCrop} disabled={processing}
+              label={processing ? 'Processing…' : 'Crop & Apply'}
+              icon={processing ? <IcoSpin/> : <IcoCheck/>}
+            />
+            <IconBtn onClick={retake} label="Retake" icon={<IcoX/>}/>
+          </div>
+        ) : (
+          <div style={{display:'flex', alignItems:'flex-start', gap:10}}>
+            <IconBtn onClick={rotatePreview} label="Rotate" icon={<IcoRotate/>} disabled={processing}/>
+            <PrimaryBtn onClick={download} label="Save Image" icon={<IcoDownload/>}/>
+            <IconBtn onClick={retake} label="New Scan" icon={<IcoX/>}/>
+          </div>
+        )}
+      </div>
+
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 };
 
-function btn(v:'dark'|'gold'): React.CSSProperties {
-  return {
-    padding:'13px 28px',borderRadius:12,border:'none',
-    fontSize:15,fontWeight:600,cursor:'pointer',
-    background:v==='gold'?'#d97706':'#1e293b',
-    color:v==='gold'?'#fff':'#94a3b8',
-    minWidth:v==='gold'?136:undefined,
-  };
-}
+const LoadingOverlay: React.FC<{label:string}> = ({label}) => (
+  <div style={{
+    position:'absolute', inset:0,
+    background:'rgba(11,15,26,0.75)', backdropFilter:'blur(4px)',
+    display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+    gap:14, color:'#e2e8f0', fontSize:14,
+  }}>
+    <svg width="36" height="36" viewBox="0 0 36 36" fill="none" style={{animation:'spin .9s linear infinite'}}>
+      <circle cx="18" cy="18" r="15" stroke="rgba(255,255,255,0.12)" strokeWidth="3"/>
+      <path d="M18 3 A15 15 0 0 1 33 18" stroke="#fbbf24" strokeWidth="3" strokeLinecap="round"/>
+    </svg>
+    <span style={{fontWeight:500, color:'#94a3b8'}}>{label}</span>
+  </div>
+);
 
 export default App;
